@@ -47,6 +47,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         currency: session.currency,
         customer: session.customer,
       });
+
+      // 금액 → 이용기간 매핑 테이블
+      const priceToDays: Record<number, number> = {
+        4900: 3,
+        7900: 7,
+        11900: 14,
+        18900: 30,
+      };
+
+      // Stripe 결제 금액에서 기간 계산
+      const durationDays = priceToDays[session.amount_total!];
+
+      // 시작/종료 날짜 계산
+      const startDate = new Date();
+      const endDate = new Date();
+      endDate.setDate(startDate.getDate() + durationDays);
+
+      // 로깅
+      console.log("\uD83D\uDCBE Service period calculated:", {
+        sessionId: session.id,
+        amount: session.amount_total,
+        durationDays,
+        startDate,
+        endDate,
+      });
+
       break;
     }
     case 'payment_intent.succeeded': {
