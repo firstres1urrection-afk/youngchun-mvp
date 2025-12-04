@@ -8,17 +8,16 @@
     "start": "next start"
   },
   "dependencies": {
-  "next": "16.0.5",
-  "react": "19.2.0",
-  "react-dom": "19.2.0",
-  "stripe": "^16.x",
-  "twilio": "^4.18.0",
-  "@vercel/postgres": "latest"
-}
-,
+    "@vercel/postgres": "^0.10.0",
+    "next": "16.0.5",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "stripe": "^16.x",
+    "twilio": "^4.18.0"
+  },
   "devDependencies": {
-    "typescript": "5.9.3",
+    "@types/node": "24.10.1",
     "@types/react": "19.2.7",
-    "@types/node": "24.10.1"
+    "typescript": "5.9.3"
   }
 }
