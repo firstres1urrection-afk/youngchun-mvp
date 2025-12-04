@@ -11,21 +11,20 @@ export const config = {
 };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: '2025-11-17.clover',
+  apiVersion: '2022-11-15',
 });
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
 
-// Helper to map price (in currency units) to number of days
 function priceToDays(amount: number): number | null {
   switch (amount) {
-    case 3:
+    case 300:
       return 3;
-    case 7:
+    case 700:
       return 7;
-    case 14:
+    case 1400:
       return 14;
-    case 30:
+    case 3000:
       return 30;
     default:
       return null;
@@ -59,18 +58,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     case 'checkout.session.completed': {
       const session = event.data.object as Stripe.Checkout.Session;
       try {
-        // Determine total amount in currency units; Stripe returns amount_total in cents
-        const amountTotal = ((session.amount_total ?? 0) / 100);
-        const days = priceToDays(amountTotal);
+        const amountTotalCents = session.amount_total ?? 0;
+        const amountUnits = amountTotalCents / 100;
+        const days = priceToDays(amountUnits);
         if (!days) {
-          console.error(`priceToDays: unknown amount ${amountTotal}, skipping Twilio purchase.`);
+          console.error(`priceToDays: unknown amount ${amountUnits}, skipping Twilio purchase.`);
           break;
         }
         const startDate = new Date();
         const endDate = new Date(startDate.getTime() + days * 24 * 60 * 60 * 1000);
         console.log(`Checkout session completed. Creating number for ${days} days from ${startDate.toISOString()} to ${endDate.toISOString()}`);
 
-        // Purchase a Twilio number
+        // Ensure table exists
+        await sql`
+          CREATE TABLE IF NOT EXISTS call_forward_numbers (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT,
+            twilio_number TEXT,
+            twilio_sid TEXT,
+            start_at TIMESTAMPTZ,
+            expire_at TIMESTAMPTZ,
+            is_released BOOLEAN DEFAULT false,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        `;
+
         const accountSid = process.env.TWILIO_ACCOUNT_SID;
         const authToken = process.env.TWILIO_AUTH_TOKEN;
         if (!accountSid || !authToken) {
@@ -86,16 +99,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           throw new Error('No available Twilio numbers found');
         }
         const candidate = available[0];
-        const voiceUrl = process.env.TWILIO_VOICE_URL || `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/twilio-callback`;
-        const smsUrl = process.env.TWILIO_SMS_URL || `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/twilio-callback`;
+        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || '';
+        const voiceUrl = process.env.TWILIO_VOICE_URL || `${baseUrl}/api/twilio-callback`;
+        const smsUrl = process.env.TWILIO_SMS_URL || `${baseUrl}/api/twilio-callback`;
         const purchased = await client.incomingPhoneNumbers.create({
           phoneNumber: candidate.phoneNumber,
           voiceUrl,
           smsUrl,
         });
 
-        const userId = session.customer ?? session.id;
-        // Insert into Postgres table
+        const userId = (session.customer as string) ?? session.id;
         await sql`
           INSERT INTO call_forward_numbers (user_id, twilio_number, twilio_sid, start_at, expire_at, is_released)
           VALUES (${userId}, ${purchased.phoneNumber}, ${purchased.sid}, ${startDate.toISOString()}, ${endDate.toISOString()}, false)
