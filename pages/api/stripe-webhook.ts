@@ -24,7 +24,15 @@ function priceToDays(amount: number): number | null {
       return 7;
     case 1400:
       return 14;
-    case 3000:
+     case 49:
+      return 3;
+    case 79:
+      return 7;
+    case 119:
+      return 14;
+    case 189:
+      return 30;
+case 3000:
       return 30;
     default:
       return null;
