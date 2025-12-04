@@ -1,6 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import Stripe from 'stripe';
 import { buffer } from 'micro';
+import { sql } from '@vercel/postgres';
+const twilio = require('twilio');
 
 export const config = {
   api: {
@@ -13,6 +15,22 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
 });
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
+
+// Helper to map price (in currency units) to number of days
+function priceToDays(amount: number): number | null {
+  switch (amount) {
+    case 3:
+      return 3;
+    case 7:
+      return 7;
+    case 14:
+      return 14;
+    case 30:
+      return 30;
+    default:
+      return null;
+  }
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -30,64 +48,73 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const sig = req.headers['stripe-signature'] as string;
   let event: Stripe.Event;
-
   try {
     event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
   } catch (err: any) {
-    console.error(`Webhook signature verification failed:`, err.message);
+    console.error(`Webhook signature verification failed: ${err.message}`);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   switch (event.type) {
     case 'checkout.session.completed': {
       const session = event.data.object as Stripe.Checkout.Session;
-      console.log('✅ checkout.session.completed:', {
-        id: session.id,
-        amount_total: session.amount_total,
-        currency: session.currency,
-        customer: session.customer,
-      });
+      try {
+        // Determine total amount in currency units; Stripe returns amount_total in cents
+        const amountTotal = ((session.amount_total ?? 0) / 100);
+        const days = priceToDays(amountTotal);
+        if (!days) {
+          console.error(`priceToDays: unknown amount ${amountTotal}, skipping Twilio purchase.`);
+          break;
+        }
+        const startDate = new Date();
+        const endDate = new Date(startDate.getTime() + days * 24 * 60 * 60 * 1000);
+        console.log(`Checkout session completed. Creating number for ${days} days from ${startDate.toISOString()} to ${endDate.toISOString()}`);
 
-      // 금액 → 이용기간 매핑 테이블
-      const priceToDays: Record<number, number> = {
-        4900: 3,
-        7900: 7,
-        11900: 14,
-        18900: 30,
-      };
+        // Purchase a Twilio number
+        const accountSid = process.env.TWILIO_ACCOUNT_SID;
+        const authToken = process.env.TWILIO_AUTH_TOKEN;
+        if (!accountSid || !authToken) {
+          throw new Error('Twilio credentials not provided');
+        }
+        const client = twilio(accountSid, authToken);
+        const available = await client.availablePhoneNumbers('US').local.list({
+          smsEnabled: true,
+          voiceEnabled: true,
+          limit: 1,
+        });
+        if (!available || available.length === 0) {
+          throw new Error('No available Twilio numbers found');
+        }
+        const candidate = available[0];
+        const voiceUrl = process.env.TWILIO_VOICE_URL || `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/twilio-callback`;
+        const smsUrl = process.env.TWILIO_SMS_URL || `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/twilio-callback`;
+        const purchased = await client.incomingPhoneNumbers.create({
+          phoneNumber: candidate.phoneNumber,
+          voiceUrl,
+          smsUrl,
+        });
 
-      // Stripe 결제 금액에서 기간 계산
-      const durationDays = priceToDays[session.amount_total!];
-
-      // 시작/종료 날짜 계산
-      const startDate = new Date();
-      const endDate = new Date();
-      endDate.setDate(startDate.getDate() + durationDays);
-
-      // 로깅
-      console.log("\uD83D\uDCBE Service period calculated:", {
-        sessionId: session.id,
-        amount: session.amount_total,
-        durationDays,
-        startDate,
-        endDate,
-      });
-
+        const userId = session.customer ?? session.id;
+        // Insert into Postgres table
+        await sql`
+          INSERT INTO call_forward_numbers (user_id, twilio_number, twilio_sid, start_at, expire_at, is_released)
+          VALUES (${userId}, ${purchased.phoneNumber}, ${purchased.sid}, ${startDate.toISOString()}, ${endDate.toISOString()}, false)
+        `;
+        console.log(`Twilio number purchased and stored: ${purchased.phoneNumber} (${purchased.sid})`);
+      } catch (err: any) {
+        console.error('Error processing checkout.session.completed:', err);
+      }
       break;
     }
     case 'payment_intent.succeeded': {
       const paymentIntent = event.data.object as Stripe.PaymentIntent;
-      console.log('✅ payment_intent.succeeded:', {
-        id: paymentIntent.id,
-        amount: paymentIntent.amount,
-        currency: paymentIntent.currency,
-        customer: paymentIntent.customer,
-      });
+      console.log(`PaymentIntent ${paymentIntent.id} succeeded`);
       break;
     }
-    default:
-      console.log(`Unhandled event type: ${event.type}`);
+    default: {
+      console.log(`Unhandled event type ${event.type}`);
+    }
   }
 
-  res.json({ received: true });
+  res.status(200).json({ received: true });
 }
