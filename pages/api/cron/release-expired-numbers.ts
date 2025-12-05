@@ -1,6 +1,4 @@
 // @ts-nocheck
-
-
 import { NextApiRequest, NextApiResponse } from 'next';
 import { sql } from '@vercel/postgres';
 const twilio = require('twilio');
