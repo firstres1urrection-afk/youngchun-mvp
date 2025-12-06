@@ -1,5 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { VoiceResponse } from "twilio";
+
+import twilio from "twilio";
+const VoiceResponse = twilio.twiml.VoiceResponse;
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const twiml = new VoiceResponse();
