@@ -74,7 +74,33 @@ const Prepare: React.FC<PreparePageProps> = ({ data }) => {
           착신전환 전체 해제
         </a>
         <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#555' }}>
-          출국 직전에 위 버튼으로 착신전환을 켜두면, 국내 번호로 오는 전화가 위 안내 번호로 연결됩니다. 귀국 후에는 반드시 착신전환 해제를 해주세요. 국내에서 테스트용으로 켜지 않는 것을 권장합니다.
+   <button
+      onClick={() => {
+        const cookie = document.cookie.split('; ').find(row => row.startsWith('user_id='));
+        const userId = cookie ? cookie.split('=')[1] : null;
+        fetch('/api/prepare/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(userId ? { user_id: userId } : {})
+        }).then(() => {
+          alert('착신전환 설정 완료되었습니다.');
+        });
+      }}
+      style={{
+        display: 'block',
+        marginBottom: '1rem',
+        padding: '0.75rem',
+        backgroundColor: '#28a745',
+        color: 'white',
+        textAlign: 'center',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: 'pointer',
+      }}
+    >
+      착신전환 설정 완료
+    </button>
+        출국 직전에 위 버튼으로 착신전환을 켜두면, 국내 번호로 오는 전화가 위 안내 번호로 연결됩니다. 귀국 후에는 반드시 착신전환 해제를 해주세요. 국내에서 테스트용으로 켜지 않는 것을 권장합니다.
         </p>
       </div>
     </div>
