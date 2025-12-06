@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/release-expired-numbers",
-      "schedule": "0 * * * *"
-    }
-  ]
-}
+{}
