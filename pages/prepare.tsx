@@ -35,11 +35,23 @@ const Prepare: React.FC<PreparePageProps> = ({ data, prepareCompleted }) => {
       <div style={{ padding: '2rem' }}>
         <h1>출국 준비 설정</h1>
         {statusMessage}
-        <p>현재 사용 가능한 안내 번호가 없습니다.</p>
+        
+         {prepareCompleted && (
+        <div style={{ marginTop: '0.75rem', padding: '0.75rem', backgroundColor: '#f0f9ff', border: '1px solid #b3e5fc', color: '#0070f3', borderRadius: '4px', fontSize: '0.9rem' }}>
+          🎉 착신전환 설정이 완료되었습니다. 출국 전까지 안심하고 이용하실 수 있습니다.
+        </div>
+      )}
+<p>현재 사용 가능한 안내 번호가 없습니다.</p>
         <p>결제 후 이 페이지를 다시 열어주세요.</p>
       </div>
     );
   }
+
+   {prepareCompleted && (
+      <div style={{ marginTop: '0.75rem', padding: '0.75rem', backgroundColor: '#f0f9ff', border: '1px solid #b3e5fc', color: '#0070f3', borderRadius: '4px', fontSize: '0.9rem' }}>
+        🎉 착신전환 설정이 완료되었습니다. 출국 전까지 안심하고 이용하실 수 있습니다.
+      </div>
+    )}
 
   const dialNumber = data.twilio_number.replace(/^\+/, '');
 
