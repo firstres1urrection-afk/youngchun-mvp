@@ -30,37 +30,44 @@ const Prepare: React.FC<PreparePageProps> = ({ data, prepareCompleted }) => {
     <p style={{ color: '#777', fontWeight: 'bold' }}>아직 착신전환 설정이 완료되지 않았습니다.</p>
   );
 
+  const completionBox = prepareCompleted ? (
+    <div
+      style={{
+        marginTop: '0.75rem',
+        padding: '0.75rem',
+        backgroundColor: '#f0f9ff',
+        border: '1px solid #b3e5fc',
+        color: '#0070f3',
+        borderRadius: '4px',
+        fontSize: '0.9rem',
+      }}
+    >
+      🎉 착신전환 설정이 완료되었습니다. 출국 전까지 안심하고 이용하실 수 있습니다.
+    </div>
+  ) : null;
+
   if (!data) {
-    return (
-      <div style={{ padding: '2rem' }}>
-        <h1>출국 준비 설정</h1>
-        {statusMessage}
-        
-         {prepareCompleted && (
-        <div style={{ marginTop: '0.75rem', padding: '0.75rem', backgroundColor: '#f0f9ff', border: '1px solid #b3e5fc', color: '#0070f3', borderRadius: '4px', fontSize: '0.9rem' }}>
-          🎉 착신전환 설정이 완료되었습니다. 출국 전까지 안심하고 이용하실 수 있습니다.
-        </div>
-      )}
-<p>현재 사용 가능한 안내 번호가 없습니다.</p>
-        <p>결제 후 이 페이지를 다시 열어주세요.</p>
-      </div>
-    );
-  }
-
-   {prepareCompleted && (
-      <div style={{ marginTop: '0.75rem', padding: '0.75rem', backgroundColor: '#f0f9ff', border: '1px solid #b3e5fc', color: '#0070f3', borderRadius: '4px', fontSize: '0.9rem' }}>
-        🎉 착신전환 설정이 완료되었습니다. 출국 전까지 안심하고 이용하실 수 있습니다.
-      </div>
-    )}
-
-  const dialNumber = data.twilio_number.replace(/^\+/, '');
-
   return (
     <div style={{ padding: '2rem' }}>
       <h1>출국 준비 설정</h1>
       {statusMessage}
-      <div style={{ marginTop: '1rem' }}>
-        <p><strong>발급된 안내 번호:</strong> {data.twilio_number}</p>
+      {completionBox}
+      <p>현재 사용 가능한 안내 번호가 없습니다.</p>
+      <p>결제 후 이 페이지를 다시 열어주세요.</p>
+    </div>
+  );
+}
+
+  const dialNumber = data.twilio_number.replace(/^\+/, '');
+
+return (
+  <div style={{ padding: '2rem' }}>
+    <h1>출국 준비 설정</h1>
+    {statusMessage}
+    {completionBox}
+
+    <div style={{ marginTop: '1rem' }}>
+      <p><strong>발급된 안내 번호:</strong> {data.twilio_number}</p>
         <p style={{ fontSize: '0.85rem', color: '#555', marginTop: '0.25rem' }}>📞 이 번호는 병찬님께 현재 배정된 해외 안내 번호입니다.</p>
         <p><strong>이용 만료 일시:</strong> {formatDate(data.expire_at)} (KST)</p>
         <p><strong>남은 기간:</strong> D-{data.daysLeft}</p>
