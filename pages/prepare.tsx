@@ -49,6 +49,7 @@ const Prepare: React.FC<PreparePageProps> = ({ data, prepareCompleted }) => {
       {statusMessage}
       <div style={{ marginTop: '1rem' }}>
         <p><strong>발급된 안내 번호:</strong> {data.twilio_number}</p>
+        <p style={{ fontSize: '0.85rem', color: '#555', marginTop: '0.25rem' }}>📞 이 번호는 병찬님께 현재 배정된 해외 안내 번호입니다.</p>
         <p><strong>이용 만료 일시:</strong> {formatDate(data.expire_at)} (KST)</p>
         <p><strong>남은 기간:</strong> D-{data.daysLeft}</p>
       </div>
