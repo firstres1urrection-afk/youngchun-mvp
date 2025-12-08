@@ -11,48 +11,99 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const authToken = process.env.TWILIO_AUTH_TOKEN;
 
   if (!accountSid || !authToken) {
-    console.error('Twilio credentials not configured');
+    console.error('[release-expired] Twilio credentials not configured');
     return res.status(500).json({ message: 'Twilio credentials not configured' });
   }
 
   const client = twilio(accountSid, authToken);
 
   try {
-    const { rows } = await sql`SELECT * FROM call_forward_numbers WHERE expire_at < NOW() AND is_released = false;`;
+    console.log('[release-expired] Cron invoked');
+
+    // 🔍 0. 최근 10개 그냥 다 찍기 (어떤 DB를 보고 있는지 확인용)
+    const debug = await sql`
+      SELECT id, twilio_number, expire_at, is_released
+      FROM call_forward_numbers
+      ORDER BY id DESC
+      LIMIT 10;
+    `;
+    console.log('[release-expired] recent call_forward_numbers rows:', debug.rows);
+
+    // 🔍 1. 실제 만료 조건 쿼리
+    const { rows } = await sql`
+      SELECT *
+      FROM call_forward_numbers
+      WHERE expire_at < NOW() AND is_released = false;
+    `;
+    console.log('[release-expired] expired+unreleased rows:', rows);
+
     let releasedCount = 0;
 
     for (const row of rows) {
       try {
-        // Attempt to get phone SID from possible columns
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let phoneSid: string | null = (row as any).twilio_sid || (row as any).phone_sid || null;
+        const number = (row as any).twilio_number as string | null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let phoneSid: string | null =
+          (row as any).twilio_sid || (row as any).phone_sid || null;
 
-        if (!phoneSid && (row as any).twilio_number) {
-          const phones = await client.incomingPhoneNumbers.list({ phoneNumber: (row as any).twilio_number, limit: 1 });
+        // Twilio SID 없으면 번호로 역조회
+        if (!phoneSid && number) {
+          const phones = await client.incomingPhoneNumbers.list({
+            phoneNumber: number,
+            limit: 1,
+          });
           if (phones && phones.length > 0) {
             phoneSid = phones[0].sid;
           }
         }
 
-        if (phoneSid) {
-          await client.incomingPhoneNumbers(phoneSid).remove();
-          console.log(`Released Twilio number: ${phoneSid} (${(row as any).twilio_number})`);
-        } else {
-          console.warn(`Phone SID not found for number: ${(row as any).twilio_number}`);
+        if (!phoneSid) {
+          console.warn(
+            '[release-expired] Phone SID not found for row',
+            row.id,
+            'number',
+            number
+          );
           continue;
         }
 
-        // Update database to mark as released
-        await sql`UPDATE call_forward_numbers SET is_released = true WHERE id = ${row.id};`;
+        // Twilio 번호 해지 (과금 끊기)
+        await client.incomingPhoneNumbers(phoneSid).remove();
+        console.log(
+          '[release-expired] Released Twilio number',
+          phoneSid,
+          '(',
+          number,
+          ')'
+        );
+
+        // DB에 is_released = true 반영
+        await sql`
+          UPDATE call_forward_numbers
+          SET is_released = true
+          WHERE id = ${row.id};
+        `;
         releasedCount++;
       } catch (err) {
-        console.error('Error releasing number', (row as any).twilio_number, err);
+        // 개별 row 처리 중 에러
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        console.error(
+          '[release-expired] Error releasing row id',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (row as any).id,
+          'number',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (row as any).twilio_number,
+          err
+        );
       }
     }
 
+    console.log('[release-expired] Finished. releasedCount =', releasedCount);
     return res.status(200).json({ releasedCount });
   } catch (error) {
-    console.error(error);
+    console.error('[release-expired] Fatal error in cron handler', error);
     return res.status(500).json({ message: 'Internal server error' });
   }
 }
