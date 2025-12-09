@@ -123,9 +123,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const candidate = purchasable[0];
 
-        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || '';
-        const voiceUrl = process.env.TWILIO_VOICE_URL || `${baseUrl}/api/twilio-callback`;
-        const smsUrl = process.env.TWILIO_SMS_URL || `${baseUrl}/api/twilio-callback`;
+        const voiceUrl = 'https://youngchun-mvp.vercel.app/api/twilio-callback';
+const smsUrl = 'https://youngchun-mvp.vercel.app/api/twilio-callback';
 
         const purchased = await client.incomingPhoneNumbers.create({
           phoneNumber: candidate.phoneNumber,
