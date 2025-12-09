@@ -99,9 +99,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const client = twilio(accountSid, authToken);
         const available = await client.availablePhoneNumbers('US').local.list({
-          smsEnabled: true,
           voiceEnabled: true,
-          limit: 1,
+limit: 1,
+          
         });
         if (!available || available.length === 0) {
           throw new Error('No available Twilio numbers found');
