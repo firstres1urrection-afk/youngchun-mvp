@@ -58,6 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             '상대방이 위 번호로 전화를 시도했습니다.',
           ].join('\n'),
         });
+// redeploy trigger
       } catch (err) {
         console.error('Failed to send SMS to alert target', err);
       }
