@@ -13,4 +13,5 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
   res.setHeader('Content-Type', 'text/xml');
   res.status(200).send(xml);
-}
+}// trigger redeploy
+
