@@ -12,4 +12,3 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   <Hangup/>
 </Response>`);
 }
-
