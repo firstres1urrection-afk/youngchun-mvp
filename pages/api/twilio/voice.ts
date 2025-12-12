@@ -1,10 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import twilio from 'twilio';
+import { sql } from '@vercel/postgres';
 
 type TwilioRequestBody = {
   From?: string;
   To?: string;
   CallStatus?: string;
+  Called?: string;
   [key: string]: any;
 };
 
@@ -17,6 +19,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body = (req.body || {}) as TwilioRequestBody;
   const from = body.From || '';
   const to = body.To || '';
+  const called = body.Called || '';
+
+  // Determine the Twilio number that was called
+  const twilioNumber = to || called || '';
+
+  // Query expire_at from call_forward_numbers table
+  let expireAt: Date | null = null;
+  try {
+    if (twilioNumber) {
+      const result = await sql`SELECT expire_at FROM call_forward_numbers WHERE twilio_number = ${twilioNumber} OR twilio_sid = ${twilioNumber} LIMIT 1`;
+      if (result.rows.length > 0 && result.rows[0].expire_at) {
+        expireAt = result.rows[0].expire_at as unknown as Date;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch expire_at for number', twilioNumber, err);
+  }
+
+  const nowTime = Date.now();
+  const expireTime = expireAt ? new Date(expireAt).getTime() : null;
+
+  // If no record or expireAt has passed, treat as expired
+  if (!expireTime || expireTime <= nowTime) {
+    const twimlExpired = `<?xml version="1.0" encoding="UTF-8"?><Response><Say language="ko-KR">서비스 기간이 만료되었습니다</Say><Hangup/></Response>`;
+    res.setHeader('Content-Type', 'text/xml; charset=utf-8');
+    return res.status(200).send(twimlExpired);
+  }
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -58,7 +87,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             '상대방이 위 번호로 전화를 시도했습니다.',
           ].join('\n'),
         });
-// redeploy trigger
       } catch (err) {
         console.error('Failed to send SMS to alert target', err);
       }
