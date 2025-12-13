@@ -47,15 +47,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).send(twimlExpired);
   }
 
+  // Twilio credentials and numbers
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const alertTarget = process.env.ALERT_TARGET_PHONE;
   const smsFrom = process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM;
+  // Use fixed alert target number as per requirements
+  const alertTarget = '+821027388709';
 
   if (accountSid && authToken && smsFrom) {
     const client = twilio(accountSid, authToken);
 
+    // Send SMS to caller
     if (from) {
+      console.log('[SMS_ATTEMPT][CALLER]');
       try {
         await client.messages.create({
           to: from,
@@ -71,7 +75,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // Send SMS to fixed alert target
     if (alertTarget) {
+      console.log('[SMS_ATTEMPT][CALLEE]');
       try {
         const now = new Date();
         const timeStr = now.toISOString();
@@ -93,6 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
+  // Build TwiML for voice response
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say language="ko-KR" loop="3">
