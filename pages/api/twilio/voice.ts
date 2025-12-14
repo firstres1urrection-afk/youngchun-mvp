@@ -54,14 +54,25 @@ export default async function handler(
 
   // 2) SMS 발송 (비동기)
   (async () => {
-    if (!token || !from || !smsFromResolved) {
-      console.warn('[voice] Skip SMS send', {
-        token,
-        from,
-        smsFromResolved,
-      });
-      return;
-    }
+    const leaveUrl = token
+  ? `https://youngchun.io/leave/${token}`
+  : 'https://youngchun.io/leave/debug'; // 임시 디버그 링크
+
+const body =
+  '지금 수신자는 해외 체류 중이라 전화를 받지 못했습니다.\n' +
+  '급한 용건은 아래 링크로 남겨주세요. 수신자에게 전달됩니다.\n\n' +
+  leaveUrl;
+
+try {
+  await client.messages.create({
+    to: from!,
+    from: smsFromResolved!,
+    body,
+  });
+  console.log('[voice] Leave link SMS sent (token optional)');
+} catch (err) {
+  console.error('[voice] Failed to send leave link SMS', err);
+}
 
     const leaveUrl = `https://youngchun.io/leave/${token}`;
     const body =
