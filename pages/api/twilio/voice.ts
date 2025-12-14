@@ -41,9 +41,10 @@ export default async function handler(
   }
 
   // send SMS asynchronously to avoid delaying voice response
-  (async () => {
+ (async () => {
     console.log('[voice] env smsFrom=', smsFrom);
 console.log('[voice] from/to/callSid=', from, to, callSid);
+    
     if (token && from && smsFrom) {
       const leaveUrl = `https://youngchun.io/leave/${token}`;
       const body =
