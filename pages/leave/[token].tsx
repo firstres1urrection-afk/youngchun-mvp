@@ -26,6 +26,14 @@ export default function LeaveTokenPage({ valid, tokenParam }: Props) {
   const [status, setStatus] = useState<'form' | 'success' | 'error'>('form');
   const [error, setError] = useState('');
 
+  if (!valid) {
+    return (
+      <div style={{ padding: '2rem', maxWidth: 600, margin: '0 auto' }}>
+        <p>유효하지 않거나 만료된 링크입니다</p>
+      </div>
+    );
+  }
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!message.trim()) {
@@ -36,31 +44,21 @@ export default function LeaveTokenPage({ valid, tokenParam }: Props) {
     try {
       const res = await fetch('/api/leave', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: tokenParam, message }),
       });
-      if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
         setStatus('success');
       } else {
-        const data = await res.json().catch(() => null);
-        setError(data?.error || '오류가 발생했습니다.');
         setStatus('error');
+        setError(data.error || '오류가 발생했습니다.');
       }
     } catch (err) {
-      setError('네트워크 오류가 발생했습니다.');
       setStatus('error');
+      setError('네트워크 오류가 발생했습니다.');
     }
   };
-
-  if (!valid) {
-    return (
-      <div style={{ padding: '2rem', maxWidth: 600, margin: '0 auto' }}>
-        <p>유효하지 않거나 만료된 링크입니다</p>
-      </div>
-    );
-  }
 
   if (status === 'success') {
     return (
