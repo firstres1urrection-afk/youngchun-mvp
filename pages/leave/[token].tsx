@@ -3,76 +3,67 @@ import { validateLeaveToken } from '../../lib/leaveToken';
 import { useState } from 'react';
 
 interface Props {
-  valid: boolean;
   tokenParam: string;
 }
 
 export const getServerSideProps: GetServerSideProps<Props> = async (context) => {
-  const token = context.params?.token as string;
-  if (!token) {
+  const token = context.params?.token;
+
+  // token 자체가 비정상이면 즉시 404
+  if (typeof token !== 'string' || token.length < 8) {
     return { notFound: true };
   }
+
   try {
-    const result = await validateLeaveToken(token);
-    const validFlag =
+    const result: any = await validateLeaveToken(token);
+
+    // validateLeaveToken이 boolean 또는 object를 반환해도 안전하게 판정
+    const isValid =
       result === true ||
-      (result &&
-        typeof result === 'object' &&
-        ((result as any).valid === true ||
-          (result as any).isValid === true ||
-          (result as any).ok === true));
-    if (!validFlag) {
+      result?.valid === true ||
+      result?.isValid === true ||
+      result?.ok === true;
+
+    if (!isValid) {
       return { notFound: true };
     }
-    return { props: { valid: true, tokenParam: token } };
-  } catch (e) {
+
+    return { props: { tokenParam: token } };
+  } catch {
     return { notFound: true };
   }
 };
 
-export default function LeaveTokenPage({ valid, tokenParam }: Props) {
+export default function LeaveTokenPage({ tokenParam }: Props) {
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState<'form' | 'success' | 'error'>('form');
-  const [errorMessage, setErrorMessage] = useState('');
+  const [error, setError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function submitMessage(e: React.FormEvent) {
     e.preventDefault();
-    setStatus('form');
-    setErrorMessage('');
+    setError('');
+
+    if (!message.trim()) {
+      setError('메시지를 입력해주세요.');
+      return;
+    }
+
     try {
       const res = await fetch('/api/leave', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message,
-          token: tokenParam ?? null,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, token: tokenParam }),
       });
-      if (res.ok) {
-        setStatus('success');
-      } else {
-        const data = await res.json().catch(() => null);
-        setStatus('error');
-        setErrorMessage(
-          (data && data.error) ||
-            '메시지 전송 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.'
-        );
-      }
-    } catch (err) {
-      setStatus('error');
-      setErrorMessage('메시지 전송 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.');
-    }
-  };
 
-  if (!valid) {
-    return (
-      <div style={{ padding: '1rem' }}>
-        <p>유효하지 않거나 만료된 링크입니다.</p>
-        <p>이 링크는 더 이상 사용할 수 없습니다.</p>
-      </div>
-    );
+      if (!res.ok) {
+        throw new Error('bad response');
+      }
+
+      setStatus('success');
+    } catch {
+      setStatus('error');
+      setError('메시지 전송 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    }
   }
 
   if (status === 'success') {
@@ -84,26 +75,28 @@ export default function LeaveTokenPage({ valid, tokenParam }: Props) {
   }
 
   return (
-    <div style={{ padding: '1rem' }}>
-      <p>
-        수신자는 해외 체류 중입니다.
-        <br />
+    <div style={{ padding: '1rem', maxWidth: 420, margin: '0 auto' }}>
+      <p style={{ marginBottom: '0.75rem' }}>
+        수신자는 해외 체류 중입니다.<br />
         아래에 메시지를 남기면 수신자에게 전달됩니다.
       </p>
-      {status === 'error' && (
-        <p style={{ color: 'red' }}>
-          {errorMessage || '메시지 전송 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.'}
-        </p>
-      )}
-      <form onSubmit={handleSubmit}>
+
+      <form onSubmit={submitMessage}>
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          required
-          style={{ width: '100%', marginBottom: '1rem' }}
+          rows={6}
+          style={{ width: '100%', marginBottom: '0.75rem' }}
         />
         <button type="submit">메시지 남기기</button>
       </form>
+
+      {status === 'error' && (
+        <p style={{ marginTop: '0.75rem' }}>{error}</p>
+      )}
+      {error && status !== 'error' && (
+        <p style={{ marginTop: '0.75rem' }}>{error}</p>
+      )}
     </div>
   );
 }
