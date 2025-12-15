@@ -9,16 +9,25 @@ interface Props {
 
 export const getServerSideProps: GetServerSideProps<Props> = async (context) => {
   const token = context.params?.token as string;
-  let valid = false;
-  if (token) {
-    try {
-      const result = await validateLeaveToken(token);
-      if (result) valid = true;
-    } catch (e) {
-      valid = false;
-    }
+  if (!token) {
+    return { notFound: true };
   }
-  return { props: { valid, tokenParam: token || '' } };
+  try {
+    const result = await validateLeaveToken(token);
+    const validFlag =
+      result === true ||
+      (result &&
+        typeof result === 'object' &&
+        ((result as any).valid === true ||
+          (result as any).isValid === true ||
+          (result as any).ok === true));
+    if (!validFlag) {
+      return { notFound: true };
+    }
+    return { props: { valid: true, tokenParam: token } };
+  } catch (e) {
+    return { notFound: true };
+  }
 };
 
 export default function LeaveTokenPage({ valid, tokenParam }: Props) {
