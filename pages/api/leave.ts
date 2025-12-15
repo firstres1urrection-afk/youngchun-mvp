@@ -7,7 +7,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
 
-  const { message } = req.body;
+  const { message, token } = req.body;
 
   if (typeof message !== 'string' || message.trim() === '') {
     return res.status(400).json({ success: false, error: 'Invalid message' });
@@ -15,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Create table if it doesn't exist
-    await sql`\
+    await sql`
       CREATE TABLE IF NOT EXISTS leave_messages (
         id SERIAL PRIMARY KEY,
         message TEXT,
@@ -23,14 +23,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       )
     `;
 
-    await sql`\
+    // Insert message into leave_messages
+    await sql`
       INSERT INTO leave_messages (message)
       VALUES (${message})
     `;
 
+    // If token is provided, mark it as used
+    if (token && typeof token === 'string' && token.trim() !== '') {
+      await sql`
+        UPDATE leave_tokens
+        SET used_at = NOW()
+        WHERE token = ${token} AND used_at IS NULL
+      `;
+    }
+
     return res.status(200).json({ success: true });
-  } catch (error: any) {
-    console.error('Error saving message:', error);
-    return res.status(500).json({ success: false, error: 'Failed to save message' });
+  } catch (error) {
+    console.error('Error saving message', error);
+    return res.status(500).json({ success: false, error: 'Server error' });
   }
 }
