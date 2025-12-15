@@ -67,12 +67,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // (일단은 "leave_messages(token, created_at)" 형태를 가정)
   try {
     await pool.query(
-      `
-      insert into leave_messages (token, created_at, from_phone, to_phone, call_sid)
-      values ($1, now(), $2, $3, $4)
-      `,
-      [leaveToken, from, to, callSid]
-    );
+  `
+  insert into leave_links
+    (token, status, created_at, expires_at, used_at, from_number, to_number, call_sid)
+  values
+    ($1, $2, now(), now() + interval '7 days', null, $3, $4, $5)
+  `,
+  [leaveToken, 'active', from, to, callSid]
+);
   } catch (e) {
     // 여기서 실패해도 voice 자체는 살아야 하므로 throw하지 않음
     console.error('[voice] leave token insert failed (check leave_messages schema)', e);
