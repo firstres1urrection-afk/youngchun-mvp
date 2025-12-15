@@ -28,19 +28,20 @@ export default function LeaveTokenPage({ valid, tokenParam }: Props) {
 
   if (!valid) {
     return (
-      <div style={{ padding: '2rem', maxWidth: 600, margin: '0 auto' }}>
+      <div style={{ padding: '1rem' }}>
         <p>유효하지 않거나 만료된 링크입니다</p>
       </div>
     );
   }
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!message.trim()) {
       setError('메시지를 입력해주세요.');
       setStatus('error');
       return;
     }
+
     try {
       const res = await fetch('/api/leave', {
         method: 'POST',
@@ -62,24 +63,21 @@ export default function LeaveTokenPage({ valid, tokenParam }: Props) {
 
   if (status === 'success') {
     return (
-      <div style={{ padding: '2rem', maxWidth: 600, margin: '0 auto' }}>
+      <div style={{ padding: '1rem' }}>
         <p>메시지가 성공적으로 전달되었습니다</p>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: '2rem', maxWidth: 600, margin: '0 auto' }}>
+    <div style={{ padding: '1rem' }}>
       <p>
-        수신자는 해외 체류 중입니다.
-        <br />
+        수신자는 해외 체류 중입니다.  <br />
         아래에 메시지를 남기면 수신자에게 전달됩니다.
       </p>
       {status === 'error' && <p style={{ color: 'red' }}>{error}</p>}
       <form onSubmit={handleSubmit}>
         <textarea
-          name="message"
-          rows={6}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           required
