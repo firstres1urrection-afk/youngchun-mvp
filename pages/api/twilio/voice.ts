@@ -183,7 +183,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           [
             err?.code ? String(err.code) : null,
             err?.message ? String(err.message) : String(err),
-            JSON.stringify({ raw: String(err) }),
+            JSON.stringify({
+  code: err?.code,
+  status: err?.status,
+  message: err?.message,
+  moreInfo: err?.moreInfo,
+  details: err?.details,
+}),
             '\ncreate_failed',
             attemptId,
           ]
