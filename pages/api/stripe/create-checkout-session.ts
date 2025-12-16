@@ -35,8 +35,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       metadata: {
         userId: userId ?? 'temp-user',
       },
-      success_url: `${req.headers.origin}/subscribe?success=true`,
-      cancel_url: `${req.headers.origin}/subscribe?canceled=true`,
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://youngchun-mvp.vercel.app';
+...
+success_url: `${baseUrl}/subscribe?success=true`,
+cancel_url: `${baseUrl}/subscribe?canceled=true`,
     });
 
     return res.status(200).json({ url: session.url });
