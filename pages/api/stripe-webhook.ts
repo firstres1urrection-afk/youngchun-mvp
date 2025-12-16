@@ -165,7 +165,39 @@ export default async function handler(
         console.error('❌ Error in checkout.session.completed:', err);
       }
 
-      break;
+    case 'customer.subscription.created': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const stripeCustomerId = subscription.customer as string;
+        const stripeSubscriptionId = subscription.id;
+        await sql`
+          CREATE TABLE IF NOT EXISTS subscriptions (
+            id SERIAL PRIMARY KEY,
+            stripe_customer_id TEXT,
+            stripe_subscription_id TEXT UNIQUE,
+            status TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        `;
+        await sql`
+          INSERT INTO subscriptions (stripe_customer_id, stripe_subscription_id, status)
+          VALUES (${stripeCustomerId}, ${stripeSubscriptionId}, 'active')
+          ON CONFLICT (stripe_subscription_id)
+          DO UPDATE SET status = 'active', updated_at = NOW()
+        `;
+        break;
+      }
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const stripeSubscriptionId = subscription.id;
+        await sql`
+          UPDATE subscriptions
+          SET status = 'canceled', updated_at = NOW()
+          WHERE stripe_subscription_id = ${stripeSubscriptionId}
+        `;
+        break;
+      }
+   break;
     }
 
     default:
