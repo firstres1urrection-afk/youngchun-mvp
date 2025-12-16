@@ -13,12 +13,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!secretKey) {
     return res.status(500).json({ error: 'Missing STRIPE_SECRET_KEY' });
   }
-
   if (!priceId) {
     return res.status(500).json({ error: 'Missing STRIPE_SUBSCRIPTION_PRICE_ID' });
   }
 
-  const stripe = new Stripe(secretKey as string);
+  const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL || 'https://youngchun-mvp.vercel.app').replace(/\/$/, '');
+
+  const stripe = new Stripe(secretKey);
 
   try {
     const { userId } = req.body || {};
@@ -26,19 +27,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      metadata: {
-        userId: userId ?? 'temp-user',
-      },
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://youngchun-mvp.vercel.app';
-...
-success_url: `${baseUrl}/subscribe?success=true`,
-cancel_url: `${baseUrl}/subscribe?canceled=true`,
+      line_items: [{ price: priceId, quantity: 1 }],
+      metadata: { userId: userId ?? 'temp-user' },
+      success_url: `${baseUrl}/subscribe?success=true`,
+      cancel_url: `${baseUrl}/subscribe?canceled=true`,
     });
 
     return res.status(200).json({ url: session.url });
