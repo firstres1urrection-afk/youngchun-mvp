@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { twiml } from 'twilio';
 import { sql } from '@vercel/postgres';
+import { sendPush } from '../../../lib/push/sendPush';
 
 // Twilio uses urlencoded by default; disable bodyParser to get raw body
 export const config = {
@@ -44,6 +45,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } catch (err) {
     console.error('Failed to record call event', err);
+  }
+
+  // trigger web push notification asynchronously (do not block response)
+  try {
+    // call sendPush without awaiting so that TwiML response isn't delayed
+    sendPush().catch((err) => {
+      console.error('Failed to send push notification', err);
+    });
+  } catch (err) {
+    console.error('Failed to initiate push', err);
   }
 
   const response = new twiml.VoiceResponse();
