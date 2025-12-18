@@ -1,3 +1,22 @@
+/**
+/**
+ * SSOT: subscription status & period are driven ONLY by customer.subscription.* events.
+ * checkout.session.completed is just a helper to map userId; do not rely on it for status/period.
+ *
+ * Operational queries:
+ * (A) Service ON users:
+ *   SELECT user_id
+ *   FROM subscriptions
+ *   WHERE status = 'active'
+ *     AND current_period_end > now();
+ *
+ * (B) Expiring soon users:
+ *   SELECT user_id, current_period_end
+ *   FROM subscriptions
+*/
+ *   WHERE status = 'active'
+ *     AND current_period_end < now() + interval '3 days';
+ */
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
 import { sql } from "@vercel/postgres";
