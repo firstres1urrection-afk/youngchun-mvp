@@ -1,21 +1,15 @@
-// pages/api/stripe-webhook.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
 import { sql } from "@vercel/postgres";
 
-// ✅ Stripe 서명 검증을 위해 반드시 raw body를 받아야 함
 export const config = {
-  api: {
-    bodyParser: false,
-  },
+  api: { bodyParser: false },
 };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
 
-// raw body 읽기 유틸
 async function buffer(readable: NextApiRequest): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of readable) {
@@ -24,30 +18,81 @@ async function buffer(readable: NextApiRequest): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+function isUuid(v: unknown): v is string {
+  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+function toTimestamptz(epochSeconds: number | null | undefined) {
+  if (!epochSeconds) return null;
+  // Postgres timestamptz expects Date; we can send ISO string.
+  return new Date(epochSeconds * 1000).toISOString();
+}
+
+async function upsertSubscription(params: {
+  stripeSubscriptionId: string;
+  stripeCustomerId: string;
+  status: string | null;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  userId: string | null; // uuid string or null
+}) {
+  const { stripeSubscriptionId, stripeCustomerId, status, currentPeriodStart, currentPeriodEnd, userId } = params;
+
+  await sql`
+    INSERT INTO subscriptions (
+      stripe_subscription_id,
+      stripe_customer_id,
+      user_id,
+      status,
+      current_period_start,
+      current_period_end,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${stripeSubscriptionId},
+      ${stripeCustomerId},
+      ${userId},
+      ${status ?? "active"},
+      ${currentPeriodStart},
+      ${currentPeriodEnd},
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (stripe_subscription_id)
+    DO UPDATE SET
+      stripe_customer_id = EXCLUDED.stripe_customer_id,
+      status = COALESCE(EXCLUDED.status, subscriptions.status),
+      current_period_start = COALESCE(EXCLUDED.current_period_start, subscriptions.current_period_start),
+      current_period_end = COALESCE(EXCLUDED.current_period_end, subscriptions.current_period_end),
+      user_id = COALESCE(EXCLUDED.user_id, subscriptions.user_id),
+      updated_at = NOW();
+  `;
+}
+
+async function updateUserIdBySubscription(stripeSubscriptionId: string, userId: string) {
+  await sql`
+    UPDATE subscriptions
+    SET user_id = ${userId}, updated_at = NOW()
+    WHERE stripe_subscription_id = ${stripeSubscriptionId};
+  `;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).send("Method Not Allowed");
   }
 
-  if (!webhookSecret) {
-    return res.status(500).json({ error: "Missing STRIPE_WEBHOOK_SECRET" });
-  }
-  if (!process.env.STRIPE_SECRET_KEY) {
-    return res.status(500).json({ error: "Missing STRIPE_SECRET_KEY" });
-  }
+  if (!webhookSecret) return res.status(500).json({ error: "Missing STRIPE_WEBHOOK_SECRET" });
+  if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ error: "Missing STRIPE_SECRET_KEY" });
 
   let event: Stripe.Event;
 
   try {
     const buf = await buffer(req);
-
     const sig = req.headers["stripe-signature"];
-    if (!sig || Array.isArray(sig)) {
-      return res.status(400).send("Missing Stripe-Signature header");
-    }
-
-    // ✅ 여기서 서명 검증 통과해야 함
+    if (!sig || Array.isArray(sig)) return res.status(400).send("Missing Stripe-Signature header");
     event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
   } catch (err: any) {
     console.error("[stripe-webhook] signature verification failed:", err?.message);
@@ -55,99 +100,94 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    switch (event.type) {
-      // ✅ Checkout 완료 시 구독ID/고객ID 확보 → DB active upsert
-      case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
+    // ✅ SSOT: customer.subscription.* drives status/period in DB
+    if (
+      event.type === "customer.subscription.created" ||
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted"
+    ) {
+      const sub = event.data.object as Stripe.Subscription;
 
-        const subscriptionId = (session.subscription as string | null) ?? null;
-        const customerId = (session.customer as string | null) ?? null;
-        const userId = (session.metadata as any)?.userId ?? null;
+      const stripeSubscriptionId = sub.id;
+      const stripeCustomerId = sub.customer as string;
+      const status = sub.status ?? null;
 
-        console.log("[stripe-webhook] checkout.session.completed", {
-          sessionId: session.id,
-          subscriptionId,
-          customerId,
-          userId,
-        });
+      const currentPeriodStart = toTimestamptz(sub.current_period_start ?? null);
+      const currentPeriodEnd = toTimestamptz(sub.current_period_end ?? null);
 
-        if (subscriptionId && customerId) {
-          await sql`
-            INSERT INTO subscriptions (stripe_subscription_id, stripe_customer_id, status, user_id, created_at, updated_at)
-            VALUES (${subscriptionId}, ${customerId}, 'active', ${userId}, NOW(), NOW())
-            ON CONFLICT (stripe_subscription_id)
-            DO UPDATE SET
-              stripe_customer_id = EXCLUDED.stripe_customer_id,
-              status = 'active',
-              user_id = COALESCE(subscriptions.user_id, EXCLUDED.user_id),
-              updated_at = NOW();
-          `;
-        }
+      const metaUserIdRaw = (sub.metadata?.userId as string | undefined) ?? undefined;
+      const userId = isUuid(metaUserIdRaw) ? metaUserIdRaw : null;
 
-        break;
-      }
+      console.log(`[stripe-webhook] ${event.type}`, {
+        stripeSubscriptionId,
+        stripeCustomerId,
+        status,
+        currentPeriodStart,
+        currentPeriodEnd,
+        userId,
+      });
 
-      // ✅ 구독이 생성되거나 업데이트되면 user_id 업데이트
-      case "customer.subscription.created":
-      case "customer.subscription.updated": {
-        const subscription = event.data.object as Stripe.Subscription;
-        const subscriptionId = subscription.id;
-        const userId = (subscription.metadata as any)?.userId ?? null;
+      await upsertSubscription({
+        stripeSubscriptionId,
+        stripeCustomerId,
+        status,
+        currentPeriodStart,
+        currentPeriodEnd,
+        userId,
+      });
 
-        console.log("[stripe-webhook] subscription.created/updated", {
-          subscriptionId,
-          userId,
-        });
-
-        if (subscriptionId && userId) {
-          await sql`
-            UPDATE subscriptions
-            SET user_id = ${userId}, updated_at = NOW()
-            WHERE stripe_subscription_id = ${subscriptionId}
-              AND (user_id IS NULL OR user_id = 'temp-user');
-          `;
-        }
-
-        break;
-      }
-
-      // ✅ 구독이 삭제(해지)되면 canceled 처리
-      case "customer.subscription.deleted": {
-        const subscription = event.data.object as Stripe.Subscription;
-
-        const subscriptionId = subscription.id;
-        const customerId = subscription.customer as string;
-
-        console.log("[stripe-webhook] customer.subscription.deleted", {
-          subscriptionId,
-          customerId,
-          status: subscription.status,
-        });
-
-        if (subscriptionId && customerId) {
-          await sql`
-            INSERT INTO subscriptions (stripe_subscription_id, stripe_customer_id, status, created_at, updated_at)
-            VALUES (${subscriptionId}, ${customerId}, 'canceled', NOW(), NOW())
-            ON CONFLICT (stripe_subscription_id)
-            DO UPDATE SET
-              stripe_customer_id = EXCLUDED.stripe_customer_id,
-              status = 'canceled',
-              updated_at = NOW();
-          `;
-        }
-
-        break;
-      }
-
-      default:
-        console.log("[stripe-webhook] unhandled event type:", event.type);
-        break;
+      return res.status(200).json({ received: true });
     }
 
-    // ✅ Stripe에 2xx 응답을 줘야 재시도 멈춤
+    // ✅ checkout.session.completed is a helper: only map userId if possible, do not fail the webhook
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+
+      const stripeSubscriptionId = (session.subscription as string | null) ?? null;
+      const stripeCustomerId = (session.customer as string | null) ?? null;
+      const metaUserIdRaw = (session.metadata?.userId as string | undefined) ?? undefined;
+      const userId = isUuid(metaUserIdRaw) ? metaUserIdRaw : null;
+
+      console.log("[stripe-webhook] checkout.session.completed", {
+        sessionId: session.id,
+        stripeSubscriptionId,
+        stripeCustomerId,
+        userId,
+        payment_status: session.payment_status,
+      });
+
+      // if we can, map user_id to existing row; if row doesn't exist yet, upsert minimal (status/period will be overwritten by subscription events)
+      if (stripeSubscriptionId && stripeCustomerId) {
+        if (userId) {
+          await upsertSubscription({
+            stripeSubscriptionId,
+            stripeCustomerId,
+            status: "active",
+            currentPeriodStart: null,
+            currentPeriodEnd: null,
+            userId,
+          });
+        } else {
+          // keep it minimal; don't force user_id
+          await upsertSubscription({
+            stripeSubscriptionId,
+            stripeCustomerId,
+            status: "active",
+            currentPeriodStart: null,
+            currentPeriodEnd: null,
+            userId: null,
+          });
+        }
+      }
+
+      return res.status(200).json({ received: true });
+    }
+
+    console.log("[stripe-webhook] unhandled event:", event.type);
     return res.status(200).json({ received: true });
   } catch (err: any) {
+    // IMPORTANT: avoid causing Stripe endless retries unless we really want it.
     console.error("[stripe-webhook] handler failed:", err?.message);
-    return res.status(500).json({ error: "Webhook handler failed" });
+    return res.status(200).json({ received: true, warning: "handler_failed_logged" });
   }
 }
