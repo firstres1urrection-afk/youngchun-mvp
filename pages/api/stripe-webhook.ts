@@ -112,8 +112,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const stripeCustomerId = sub.customer as string;
       const status = sub.status ?? null;
 
-      const currentPeriodStart = toTimestamptz(sub.current_period_start ?? null);
-      const currentPeriodEnd = toTimestamptz(sub.current_period_end ?? null);
+      const item = sub.items?.data?.[0];
+
+const currentPeriodStart = toTimestamptz(
+  (sub.current_period_start ?? item?.current_period_start) ?? null
+);
+const currentPeriodEnd = toTimestamptz(
+  (sub.current_period_end ?? item?.current_period_end) ?? null
+);
 
       const metaUserIdRaw = (sub.metadata?.userId as string | undefined) ?? undefined;
       const userId = isUuid(metaUserIdRaw) ? metaUserIdRaw : null;
