@@ -31,9 +31,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // generate a new anonymous user
-    const userId = randomUUID();
-    // insert into users table
-    await sql`INSERT INTO users (id, created_at) VALUES (${userId}, NOW())`;
+const userId = randomUUID();
+
+// placeholder email (NOT NULL 제약 회피)
+const email = `anon+${userId}@youngchun.local`;
+
+// insert into users table
+await sql`
+  INSERT INTO users (id, email, created_at)
+  VALUES (${userId}, ${email}, NOW())
+`;
 
     const stripe = new Stripe(secretKey);
     const session = await stripe.checkout.sessions.create({
