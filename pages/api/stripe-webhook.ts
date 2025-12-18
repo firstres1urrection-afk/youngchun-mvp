@@ -62,22 +62,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const subscriptionId = (session.subscription as string | null) ?? null;
         const customerId = (session.customer as string | null) ?? null;
+        const userId = (session.metadata as any)?.userId ?? null;
 
         console.log("[stripe-webhook] checkout.session.completed", {
           sessionId: session.id,
           subscriptionId,
           customerId,
+          userId,
         });
 
         if (subscriptionId && customerId) {
           await sql`
-            INSERT INTO subscriptions (stripe_subscription_id, stripe_customer_id, status, created_at, updated_at)
-            VALUES (${subscriptionId}, ${customerId}, 'active', NOW(), NOW())
+            INSERT INTO subscriptions (stripe_subscription_id, stripe_customer_id, status, user_id, created_at, updated_at)
+            VALUES (${subscriptionId}, ${customerId}, 'active', ${userId}, NOW(), NOW())
             ON CONFLICT (stripe_subscription_id)
             DO UPDATE SET
               stripe_customer_id = EXCLUDED.stripe_customer_id,
               status = 'active',
+              user_id = COALESCE(subscriptions.user_id, EXCLUDED.user_id),
               updated_at = NOW();
+          `;
+        }
+
+        break;
+      }
+
+      // ✅ 구독이 생성되거나 업데이트되면 user_id 업데이트
+      case "customer.subscription.created":
+      case "customer.subscription.updated": {
+        const subscription = event.data.object as Stripe.Subscription;
+        const subscriptionId = subscription.id;
+        const userId = (subscription.metadata as any)?.userId ?? null;
+
+        console.log("[stripe-webhook] subscription.created/updated", {
+          subscriptionId,
+          userId,
+        });
+
+        if (subscriptionId && userId) {
+          await sql`
+            UPDATE subscriptions
+            SET user_id = ${userId}, updated_at = NOW()
+            WHERE stripe_subscription_id = ${subscriptionId}
+              AND (user_id IS NULL OR user_id = 'temp-user');
           `;
         }
 
