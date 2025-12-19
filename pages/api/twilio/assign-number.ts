@@ -2,10 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { Twilio } from "twilio";
 import { Pool } from "@neondatabase/serverless";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
@@ -14,9 +11,7 @@ export default async function handler(
   /** ===============================
    *  ENV VALIDATION
    *  =============================== */
-  const databaseUrl =
-    process.env.DATABASE_URL || process.env.POSTGRES_URL;
-
+  const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
   if (!databaseUrl) {
     return res.status(500).json({
       error: "DATABASE_URL / POSTGRES_URL not configured",
@@ -25,20 +20,15 @@ export default async function handler(
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-
   if (!accountSid || !authToken) {
     return res.status(500).json({
       error: "Twilio credentials not configured",
     });
   }
 
-  // 🔒 반드시 환경변수로만 받는다
+  // ✅ Voice webhook URL은 반드시 한 줄 URL이어야 함
   const voiceWebhookUrl = process.env.TWILIO_VOICE_WEBHOOK_URL?.trim();
-
-  if (
-    !voiceWebhookUrl ||
-    !/^https:\/\/.+/i.test(voiceWebhookUrl)
-  ) {
+  if (!voiceWebhookUrl || !/^https:\/\/.+/i.test(voiceWebhookUrl)) {
     return res.status(500).json({
       error: "Invalid TWILIO_VOICE_WEBHOOK_URL",
       value: voiceWebhookUrl,
@@ -57,19 +47,22 @@ export default async function handler(
      *  =============================== */
     const { rows: subs } = await pool.query<{
       user_id: string;
+      current_period_start: string | null;
       current_period_end: string;
     }>(`
-      SELECT user_id, current_period_end
+      SELECT user_id, current_period_start, current_period_end
       FROM subscriptions
       WHERE status = 'active'
         AND current_period_end > NOW()
         AND user_id IS NOT NULL
+      ORDER BY updated_at DESC
     `);
 
     if (subs.length === 0) {
       return res.status(200).json({
         ok: true,
         message: "No active subscribers",
+        processed: 0,
       });
     }
 
@@ -82,11 +75,17 @@ export default async function handler(
      *  =============================== */
     for (const sub of subs) {
       const userId = sub.user_id;
+
+      // ✅ DB 스키마에 start_at NOT NULL이므로 반드시 채워야 함
+      // - Stripe의 current_period_start가 있으면 그걸 사용
+      // - 없으면 NOW()
+      const startAt = sub.current_period_start ?? new Date().toISOString();
+
       const expireAt = sub.current_period_end;
 
-      /** ---- reuse existing number ---- */
+      /** ---- reuse existing number (is_released=false) ---- */
       const { rows: existing } = await pool.query<{
-        id: string;
+        id: number;
         expire_at: string | null;
       }>(
         `
@@ -104,14 +103,12 @@ export default async function handler(
         reused++;
 
         const row = existing[0];
-        if (
-          !row.expire_at ||
-          new Date(row.expire_at) < new Date(expireAt)
-        ) {
+        if (!row.expire_at || new Date(row.expire_at) < new Date(expireAt)) {
           await pool.query(
             `
             UPDATE call_forward_numbers
-            SET expire_at = $2, updated_at = NOW()
+            SET expire_at = $2,
+                updated_at = NOW()
             WHERE id = $1
             `,
             [row.id, expireAt]
@@ -123,42 +120,34 @@ export default async function handler(
       }
 
       /** ---- buy new number ---- */
-      const available =
-        await twilio.availablePhoneNumbers("US").local.list({
-          voiceEnabled: true,
-          limit: 1,
-        });
+      const available = await twilio.availablePhoneNumbers("US").local.list({
+        voiceEnabled: true,
+        limit: 1,
+      });
 
       if (available.length === 0) {
-        console.warn(
-          "[assign-number] No available numbers for user",
-          userId
-        );
+        console.warn("[assign-number] No available numbers for user", userId);
         continue;
       }
 
       const numberToBuy = available[0].phoneNumber;
 
-      const purchasedNumber =
-        await twilio.incomingPhoneNumbers.create({
-          phoneNumber: numberToBuy,
-          voiceUrl: voiceWebhookUrl,
-          voiceMethod: "POST",
-        });
+      const purchasedNumber = await twilio.incomingPhoneNumbers.create({
+        phoneNumber: numberToBuy,
+        voiceUrl: voiceWebhookUrl,
+        voiceMethod: "POST",
+      });
 
+      // ✅ call_forward_numbers 스키마 기준으로 INSERT
+      // (id, user_id, twilio_number, twilio_sid, start_at, expire_at, is_released, created_at, updated_at)
       await pool.query(
         `
         INSERT INTO call_forward_numbers
-          (user_id, twilio_number, twilio_sid, expire_at, is_released, created_at, updated_at)
+          (user_id, twilio_number, twilio_sid, start_at, expire_at, is_released, created_at, updated_at)
         VALUES
-          ($1, $2, $3, $4, false, NOW(), NOW())
+          ($1, $2, $3, $4, $5, false, NOW(), NOW())
         `,
-        [
-          userId,
-          purchasedNumber.phoneNumber,
-          purchasedNumber.sid,
-          expireAt,
-        ]
+        [userId, purchasedNumber.phoneNumber, purchasedNumber.sid, startAt, expireAt]
       );
 
       purchased++;
