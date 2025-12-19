@@ -207,9 +207,26 @@ const currentPeriodEnd = toTimestamptz(
       }
 
       return res.status(200).json({ received: true });
+   if (event.type === "invoice.payment_succeeded") {
+    const invoice = event.data.object as Stripe.Invoice;
+    const stripeSubscriptionId = (invoice.subscription as string | null) ?? null;
+    const stripeCustomerId = (invoice.customer as string | null) ?? null;
+    if (stripeSubscriptionId && stripeCustomerId) {
+      await upsertSubscription({
+        stripeSubscriptionId,
+        stripeCustomerId,
+        status: "active",
+        currentPeriodStart: null,
+        currentPeriodEnd: null,
+        userId: null,
+      });
     }
+    return res.status(200).json({ received: true });
+  }
+  }
 
-    console.log("[stripe-webhook] unhandled event:", event.type);
+    con
+      sole.log("[stripe-webhook] unhandled event:", event.type);
     return res.status(200).json({ received: true });
   } catch (err: any) {
     // IMPORTANT: avoid causing Stripe endless retries unless we really want it.
