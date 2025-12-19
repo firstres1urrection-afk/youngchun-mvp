@@ -28,14 +28,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Fetch expired numbers that have not been released yet
-    const { rows } = await pool.query(
-      `SELECT id, twilio_number AS phone_number, twilio_sid
-       FROM call_forward_numbers
-       WHERE is_released = false
-         AND expire_at IS NOT NULL
-         AND expire_at < NOW()
-         AND twilio_sid IS NOT NULL`
-    );
+    const { rows } = await pool.query(`
+      SELECT id, twilio_number AS phone_number, twilio_sid
+      FROM call_forward_numbers
+      WHERE is_released = false
+        AND expire_at IS NOT NULL
+        AND expire_at < NOW()
+        AND twilio_sid IS NOT NULL
+    `);
 
     const processed = rows.length;
     let releasedCount = 0;
@@ -45,41 +45,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const row of rows) {
       const phoneNumber = row.phone_number;
       const sid = row.twilio_sid;
-
-      let status: 'released' | 'failed' = 'released';
+      let status: string = '';
       let error: string | undefined;
 
-      // Attempt to release the number on Twilio side; don't stop on failure
       try {
+        // Attempt to release the number on Twilio side; don't stop on failure
         await client.incomingPhoneNumbers(sid).remove();
-        status = 'released';
-      } catch (err: any) {
-        status = 'failed';
-        error = err?.message || String(err);
-      }
 
-      // Update the database to mark the number as released
-      try {
-        await pool.query(
-          `UPDATE call_forward_numbers
-           SET is_released = true,
-               updated_at = NOW()
-           WHERE id = $1`,
-          [row.id]
-        );
-      } catch (err2: any) {
-        status = 'failed';
-        const dbErr = err2?.message || String(err2);
-        error = error ? `${error}; DB update failed: ${dbErr}` : `DB update failed: ${dbErr}`;
-      }
-
-      if (status === 'released') {
-        releasedCount++;
-      } else if (status === 'failed') {
-        failedCount++;
+        // Twilio release succeeded; update DB to mark released
+        try {
+          await pool.query(
+            'UPDATE call_forward_numbers SET is_released = true, updated_at = NOW() WHERE id = $1',
+            [row.id],
+          );
+          status = 'released';
+          releasedCount += 1;
+        } catch (dbError: any) {
+          // Twilio release succeeded but DB update failed
+          status = 'failed_db';
+          error = dbError?.message || 'DB update failed';
+          failedCount += 1;
+        }
+      } catch (twilioError: any) {
+        // Twilio release failed; do not mark as released
+        status = 'failed_twilio';
+        error = twilioError?.message || 'Twilio release failed';
+        failedCount += 1;
+        // Optionally update updated_at to reflect attempted release
+        try {
+          await pool.query(
+            'UPDATE call_forward_numbers SET updated_at = NOW() WHERE id = $1',
+            [row.id],
+          );
+        } catch (dbError) {
+          // ignore further DB errors here
+        }
       }
 
       results.push({
+        id: row.id,
         phone_number: phoneNumber,
         twilio_sid: sid,
         status,
@@ -95,8 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       results,
     });
   } catch (err: any) {
-    console.error('[cron release-expired-numbers] fatal:', err);
-    return res.status(500).json({ ok: false, error: 'Internal server error' });
+    return res.status(500).json({ ok: false, error: err?.message || 'Unknown error' });
   } finally {
     await pool.end();
   }
