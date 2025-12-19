@@ -1,12 +1,17 @@
-import type { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
-import { sql } from "@vercel/postgres";
+import type { NextApiRequest, NextApiResponse } from 'next';
+import Stripe from 'stripe';
+import { sql } from '@vercel/postgres';
 
 export const config = {
-  api: { bodyParser: false },
+  api: {
+    bodyParser: false,
+  },
 };
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: '2022-11-15',
+});
+
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
 
 /**
@@ -15,177 +20,85 @@ const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
 async function buffer(readable: NextApiRequest): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of readable) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
   }
   return Buffer.concat(chunks);
 }
 
-function isUuid(v: unknown): v is string {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
-  );
-}
-
-function toTimestamptz(epochSeconds?: number | null) {
-  if (!epochSeconds) return null;
-  return new Date(epochSeconds * 1000).toISOString();
-}
-
-async function upsertSubscription(params: {
-  stripeSubscriptionId: string;
-  stripeCustomerId: string;
-  status: string | null;
-  currentPeriodStart: string | null;
-  currentPeriodEnd: string | null;
-  userId: string | null;
-}) {
-  const {
-    stripeSubscriptionId,
-    stripeCustomerId,
-    status,
-    currentPeriodStart,
-    currentPeriodEnd,
-    userId,
-  } = params;
-
-  await sql`
-    INSERT INTO subscriptions (
-      stripe_subscription_id,
-      stripe_customer_id,
-      user_id,
-      status,
-      current_period_start,
-      current_period_end,
-      created_at,
-      updated_at
-    )
-    VALUES (
-      ${stripeSubscriptionId},
-      ${stripeCustomerId},
-      ${userId},
-      ${status ?? "active"},
-      ${currentPeriodStart},
-      ${currentPeriodEnd},
-      NOW(),
-      NOW()
-    )
-    ON CONFLICT (stripe_subscription_id)
-    DO UPDATE SET
-      stripe_customer_id = EXCLUDED.stripe_customer_id,
-      status = COALESCE(EXCLUDED.status, subscriptions.status),
-      current_period_start = COALESCE(EXCLUDED.current_period_start, subscriptions.current_period_start),
-      current_period_end = COALESCE(EXCLUDED.current_period_end, subscriptions.current_period_end),
-      user_id = COALESCE(EXCLUDED.user_id, subscriptions.user_id),
-      updated_at = NOW();
-  `;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-    return res.status(405).send("Method Not Allowed");
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).end('Method Not Allowed');
   }
 
-  if (!webhookSecret || !process.env.STRIPE_SECRET_KEY) {
-    return res.status(500).json({ error: "Stripe env not configured" });
-  }
+  const buf = await buffer(req);
+  const sig = req.headers['stripe-signature'];
 
   let event: Stripe.Event;
-
   try {
-    const buf = await buffer(req);
-    const sig = req.headers["stripe-signature"];
-    if (!sig || Array.isArray(sig)) {
-      return res.status(400).send("Missing Stripe-Signature");
-    }
-
-    event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(buf, sig as string, webhookSecret);
   } catch (err: any) {
-    console.error("[stripe-webhook] signature verification failed:", err?.message);
-    return res.status(400).send("Webhook signature verification failed");
+    console.error(`Webhook signature verification failed: ${err.message}`);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   try {
-    /**
-     * 🔹 subscription lifecycle events (SSOT)
-     */
-    if (
-      event.type === "customer.subscription.created" ||
-      event.type === "customer.subscription.updated" ||
-      event.type === "customer.subscription.deleted"
-    ) {
-      const sub = event.data.object as Stripe.Subscription;
+    switch (event.type) {
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object as Stripe.Subscription;
+        const {
+          id: subscription_id,
+          customer,
+          status,
+          current_period_start,
+          current_period_end,
+          cancel_at_period_end,
+        } = sub;
 
-      const item = sub.items?.data?.[0];
-
-      await upsertSubscription({
-        stripeSubscriptionId: sub.id,
-        stripeCustomerId: sub.customer as string,
-        status: sub.status ?? null,
-        currentPeriodStart: toTimestamptz(
-          sub.current_period_start ?? item?.current_period_start
-        ),
-        currentPeriodEnd: toTimestamptz(
-          sub.current_period_end ?? item?.current_period_end
-        ),
-        userId: isUuid(sub.metadata?.userId) ? sub.metadata.userId : null,
-      });
-
-      return res.status(200).json({ received: true });
-    }
-
-    /**
-     * 🔹 checkout.session.completed (userId mapping helper)
-     */
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object as Stripe.Checkout.Session;
-
-      const subscriptionId = session.subscription as string | null;
-      const customerId = session.customer as string | null;
-      const userId = isUuid(session.metadata?.userId)
-        ? session.metadata!.userId
-        : null;
-
-      if (subscriptionId && customerId) {
-        await upsertSubscription({
-          stripeSubscriptionId: subscriptionId,
-          stripeCustomerId: customerId,
-          status: "active",
-          currentPeriodStart: null,
-          currentPeriodEnd: null,
-          userId,
-        });
+        // Upsert into subscriptions table using top-level current_period_start/end
+        await sql`
+          INSERT INTO subscriptions (id, customer_id, status, current_period_start, current_period_end, cancel_at_period_end)
+          VALUES (${subscription_id}, ${customer as string}, ${status}, to_timestamp(${current_period_start}), to_timestamp(${current_period_end}), ${cancel_at_period_end})
+          ON CONFLICT (id) DO UPDATE SET
+            customer_id = EXCLUDED.customer_id,
+            status = EXCLUDED.status,
+            current_period_start = EXCLUDED.current_period_start,
+            current_period_end = EXCLUDED.current_period_end,
+            cancel_at_period_end = EXCLUDED.cancel_at_period_end;
+        `;
+        break;
       }
 
-      return res.status(200).json({ received: true });
-    }
-
-    /**
-     * 🔹 invoice.payment_succeeded (activate subscription)
-     */
-    if (event.type === "invoice.payment_succeeded") {
-      const invoice = event.data.object as Stripe.Invoice;
-
-      if (invoice.subscription && invoice.customer) {
-        await upsertSubscription({
-          stripeSubscriptionId: invoice.subscription as string,
-          stripeCustomerId: invoice.customer as string,
-          status: "active",
-          currentPeriodStart: null,
-          currentPeriodEnd: null,
-          userId: null,
-        });
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId = invoice.subscription as string | null;
+        if (subscriptionId) {
+          await sql`
+            INSERT INTO subscriptions (id, status)
+            VALUES (${subscriptionId}, 'active')
+            ON CONFLICT (id) DO UPDATE SET status = 'active';
+          `;
+        }
+        break;
       }
 
-      return res.status(200).json({ received: true });
-    }
+      case 'checkout.session.completed': {
+        // Use metadata for user mapping if needed
+        // No-op for now
+        break;
+      }
 
-    // unhandled but acknowledged
-    console.log("[stripe-webhook] unhandled event:", event.type);
-    return res.status(200).json({ received: true });
+      default:
+        // Unexpected event type; do nothing
+        break;
+    }
+    res.json({ received: true });
   } catch (err: any) {
-    console.error("[stripe-webhook] handler failed:", err?.message);
-    return res.status(200).json({ received: true });
+    console.error('Error handling webhook event:', err);
+    res.status(500).send('Webhook handler failed');
   }
 }
+
+export default handler;
