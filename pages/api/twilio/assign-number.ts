@@ -2,35 +2,59 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { Twilio } from "twilio";
 import { Pool } from "@neondatabase/serverless";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  /** ===============================
+   *  ENV VALIDATION
+   *  =============================== */
+  const databaseUrl =
+    process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
   if (!databaseUrl) {
-    return res.status(500).json({ error: "DB connection not configured (DATABASE_URL/POSTGRES_URL missing)" });
+    return res.status(500).json({
+      error: "DATABASE_URL / POSTGRES_URL not configured",
+    });
   }
 
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
+
   if (!accountSid || !authToken) {
-    return res.status(500).json({ error: "Twilio credentials not configured" });
+    return res.status(500).json({
+      error: "Twilio credentials not configured",
+    });
   }
 
-  // ✅ IMPORTANT: trim() to avoid newline/whitespace in env or template strings
-  const baseUrl = (process.env.BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || "https://youngchun-mvp.vercel.app")
-    .trim()
-    .replace(/\/$/, "");
+  // 🔒 반드시 환경변수로만 받는다
+  const voiceWebhookUrl = process.env.TWILIO_VOICE_WEBHOOK_URL?.trim();
 
-  const voiceWebhookUrl = (process.env.TWILIO_VOICE_WEBHOOK_URL || `${baseUrl}/api/twilio/voice`).trim();
+  if (
+    !voiceWebhookUrl ||
+    !/^https:\/\/.+/i.test(voiceWebhookUrl)
+  ) {
+    return res.status(500).json({
+      error: "Invalid TWILIO_VOICE_WEBHOOK_URL",
+      value: voiceWebhookUrl,
+    });
+  }
 
+  /** ===============================
+   *  CLIENTS
+   *  =============================== */
   const pool = new Pool({ connectionString: databaseUrl });
-  const client = new Twilio(accountSid, authToken);
+  const twilio = new Twilio(accountSid, authToken);
 
   try {
-    // 1) active subscribers
+    /** ===============================
+     *  1) ACTIVE SUBSCRIPTIONS
+     *  =============================== */
     const { rows: subs } = await pool.query<{
       user_id: string;
       current_period_end: string;
@@ -42,27 +66,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         AND user_id IS NOT NULL
     `);
 
-    if (!subs.length) {
-      return res.status(200).json({ ok: true, message: "No active subscribers", processed: 0 });
+    if (subs.length === 0) {
+      return res.status(200).json({
+        ok: true,
+        message: "No active subscribers",
+      });
     }
 
     let purchased = 0;
     let reused = 0;
     let updatedExpiry = 0;
 
+    /** ===============================
+     *  2) PROCESS USERS
+     *  =============================== */
     for (const sub of subs) {
       const userId = sub.user_id;
       const expireAt = sub.current_period_end;
 
-      // 2-a) reuse existing unreleased number
+      /** ---- reuse existing number ---- */
       const { rows: existing } = await pool.query<{
         id: string;
         expire_at: string | null;
-        twilio_number: string | null;
-        twilio_sid: string | null;
       }>(
         `
-        SELECT id, expire_at, twilio_number, twilio_sid
+        SELECT id, expire_at
         FROM call_forward_numbers
         WHERE user_id = $1
           AND is_released = false
@@ -73,10 +101,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       if (existing.length > 0) {
-        reused += 1;
-        const row = existing[0];
+        reused++;
 
-        if (!row.expire_at || new Date(row.expire_at) < new Date(expireAt)) {
+        const row = existing[0];
+        if (
+          !row.expire_at ||
+          new Date(row.expire_at) < new Date(expireAt)
+        ) {
           await pool.query(
             `
             UPDATE call_forward_numbers
@@ -85,30 +116,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             `,
             [row.id, expireAt]
           );
-          updatedExpiry += 1;
+          updatedExpiry++;
         }
 
         continue;
       }
 
-      // 2-b) purchase new number
-      const available = await client.availablePhoneNumbers("US").local.list({
-        voiceEnabled: true,
-        limit: 1,
-      });
+      /** ---- buy new number ---- */
+      const available =
+        await twilio.availablePhoneNumbers("US").local.list({
+          voiceEnabled: true,
+          limit: 1,
+        });
 
-      if (!available || available.length === 0) {
-        console.warn("[assign-number] No available phone numbers found for user:", userId);
+      if (available.length === 0) {
+        console.warn(
+          "[assign-number] No available numbers for user",
+          userId
+        );
         continue;
       }
 
-      const numberToPurchase = available[0].phoneNumber;
+      const numberToBuy = available[0].phoneNumber;
 
-      const purchasedNumber = await client.incomingPhoneNumbers.create({
-        phoneNumber: numberToPurchase,
-        voiceUrl: voiceWebhookUrl,
-        voiceMethod: "POST",
-      });
+      const purchasedNumber =
+        await twilio.incomingPhoneNumbers.create({
+          phoneNumber: numberToBuy,
+          voiceUrl: voiceWebhookUrl,
+          voiceMethod: "POST",
+        });
 
       await pool.query(
         `
@@ -117,10 +153,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         VALUES
           ($1, $2, $3, $4, false, NOW(), NOW())
         `,
-        [userId, purchasedNumber.phoneNumber, purchasedNumber.sid, expireAt]
+        [
+          userId,
+          purchasedNumber.phoneNumber,
+          purchasedNumber.sid,
+          expireAt,
+        ]
       );
 
-      purchased += 1;
+      purchased++;
     }
 
     return res.status(200).json({
@@ -132,7 +173,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       voiceWebhookUrl,
     });
   } catch (err: any) {
-    console.error("[assign-number] error:", err?.message || err);
-    return res.status(500).json({ error: "Internal server error" });
+    console.error("[assign-number] fatal:", err);
+    return res.status(500).json({
+      error: "Internal server error",
+    });
   }
 }
