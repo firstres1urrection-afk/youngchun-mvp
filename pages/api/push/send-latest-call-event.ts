@@ -41,28 +41,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // generate trace_id using current timestamp and random string
   const trace_id = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-  if (callEvent) {
+  // log start
+  console.log(`[push-api] start trace_id=${trace_id} target=${JSON.stringify(target)} attempted=${attempted}`);
+
+  if (!callEvent) {
+    // skip case
+    console.log(`[push-api] skip trace_id=${trace_id} reason=no_call_event target=${JSON.stringify(target)}`);
+  } else {
+    // attempt case
     attempted = true;
-const pushResult = await sendPush();
-    success = pushResult.success;
-    if (!success) {
+    console.log(`[push-api] attempt trace_id=${trace_id} call_sid=${callEvent.call_sid} user_id=${callEvent.user_id}`);
+
+    const pushResult = await sendPush();
+    success = !!pushResult.success;
+    if (success) {
+      console.log(`[push-api] success trace_id=${trace_id}`);
+    } else {
       error = {
         statusCode: pushResult.statusCode ?? null,
         name: pushResult.name ?? null,
         message: pushResult.message ?? 'push failed',
       };
-      console.error(`[push] failed trace_id=${trace_id}`, error);
- //  }  //   try {
-     //  await sendPush();
-     //  success = true;
-    }//  catch (err: any) {
-     //  success = false;
-     //  error = {
-     // //    statusCode: typeof err?.statusCode === 'number' ? err.statusCode : null,
-     //    name: typeof err?.name === 'string' ? err.name : null,
-     // //    message: typeof err?.message === 'string' ? err.message : String(err),
-      };
-     //  console.error(`[push] failed trace_id=${trace_id}`, err);
+      console.error(`[push-api] failed trace_id=${trace_id}`, error);
     }
   }
 
