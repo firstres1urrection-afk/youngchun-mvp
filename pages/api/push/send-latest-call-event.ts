@@ -9,6 +9,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const callSid = typeof call_sid === 'string' ? call_sid : undefined;
   const userId = typeof user_id === 'string' ? user_id : undefined;
 
+  // determine target object
+  const target = {
+    call_sid: callSid ?? null,
+    user_id: userId ?? null,
+  };
+
   let callEvent: any = null;
   try {
     if (callSid) {
@@ -29,17 +35,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   let attempted = false;
-  let reason: string | undefined;
+  let success = false;
+  let error: any = null;
+
+  // generate trace_id using current timestamp and random string
+  const trace_id = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
   if (callEvent) {
+    attempted = true;
     try {
-      await sendPush();
-      attempted = true;
+      const result = await sendPush();
+      if (result && typeof (result as any).success === 'boolean') {
+        success = (result as any).success;
+      } else {
+        success = true;
+      }
     } catch (err: any) {
-      console.error('push failed', err);
-      attempted = true;
-      reason = err?.message ?? 'push failed';
+      success = false;
+      error = {
+        statusCode: err?.statusCode ?? null,
+        message: err?.message ?? 'push failed',
+        name: err?.name ?? null,
+      };
+      console.error(`[push] failed trace_id=${trace_id}`, err);
     }
   }
 
-  res.status(200).json({ ok: true, attempted, ...(reason ? { reason } : {}) });
+  const response: any = {
+    ok: true,
+    attempted,
+    success,
+    target,
+    trace_id,
+  };
+
+  if (!success && error) {
+    response.error = error;
+  }
+
+  res.status(200).json(response);
 }
