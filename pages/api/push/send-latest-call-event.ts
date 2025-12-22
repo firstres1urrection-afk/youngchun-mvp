@@ -4,16 +4,40 @@ import { sendPush } from '../../../lib/push/sendPush';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  const { call_sid, user_id } = req.query;
 
+  const { call_sid, user_id } = req.query;
   const callSid = typeof call_sid === 'string' ? call_sid : undefined;
   const userId = typeof user_id === 'string' ? user_id : undefined;
 
-  // determine target object
+  // 🔒 Guard: only allow sending push when debug=1
+  const debug = req.query.debug === '1';
+
+  const trace_id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
   const target = {
     call_sid: callSid ?? null,
     user_id: userId ?? null,
   };
+
+  // Always log start (for correlation)
+  console.log(
+    `[push-api] start trace_id=${trace_id} target=${JSON.stringify(target)} debug=${debug}`,
+  );
+
+  // ✅ 폭주 차단: debug=1 없으면 푸시 절대 발송하지 않음
+  if (!debug) {
+    console.log(`[push-api] guard_blocked trace_id=${trace_id}`);
+    return res.status(200).json({
+      ok: true,
+      attempted: false,
+      success: false,
+      target,
+      trace_id,
+      reason: 'guard_blocked',
+    });
+  }
+
+  // ---- below: normal behavior (only when debug=1) ----
 
   let callEvent: any = null;
   try {
@@ -31,52 +55,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (rows.length > 0) callEvent = rows[0];
     }
   } catch (err) {
-    console.error('error querying call_events', err);
+    console.error(`[push-api] error querying call_events trace_id=${trace_id}`, err);
   }
-
-  let attempted = false;
-  let success = false;
-  let error: any = null;
-
-  // generate trace_id using current timestamp and random string
-  const trace_id = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-
-  // log start
-  console.log(`[push-api] start trace_id=${trace_id} target=${JSON.stringify(target)} attempted=${attempted}`);
 
   if (!callEvent) {
-    // skip case
-    console.log(`[push-api] skip trace_id=${trace_id} reason=no_call_event target=${JSON.stringify(target)}`);
-  } else {
-    // attempt case
-    attempted = true;
-    console.log(`[push-api] attempt trace_id=${trace_id} call_sid=${callEvent.call_sid} user_id=${callEvent.user_id}`);
-
-    const pushResult = await sendPush({ trace_id });
-    success = !!pushResult.success;
-    if (success) {
-      console.log(`[push-api] success trace_id=${trace_id}`);
-    } else {
-      error = {
-        statusCode: pushResult.statusCode ?? null,
-        name: pushResult.name ?? null,
-        message: pushResult.message ?? 'push failed',
-      };
-      console.error(`[push-api] failed trace_id=${trace_id}`, error);
-    }
+    console.log(
+      `[push-api] skip trace_id=${trace_id} reason=no_call_event target=${JSON.stringify(target)}`,
+    );
+    return res.status(200).json({
+      ok: true,
+      attempted: false,
+      success: false,
+      target,
+      trace_id,
+      reason: 'no_call_event',
+    });
   }
 
-  const response: any = {
-    ok: true,
-    attempted,
-    success,
-    target,
-    trace_id,
+  console.log(
+    `[push-api] attempt trace_id=${trace_id} call_sid=${callEvent.call_sid ?? 'null'} user_id=${callEvent.user_id ?? 'null'}`,
+  );
+
+  // sendPush returns success/failure result (SSOT)
+  const pushResult = await sendPush({ trace_id });
+
+  if (pushResult.success) {
+    console.log(`[push-api] success trace_id=${trace_id}`);
+    return res.status(200).json({
+      ok: true,
+      attempted: true,
+      success: true,
+      target,
+      trace_id,
+    });
+  }
+
+  const error = {
+    statusCode: pushResult.statusCode ?? null,
+    name: pushResult.name ?? null,
+    message: pushResult.message ?? 'push failed',
   };
 
-  if (!success && error) {
-    response.error = error;
-  }
+  console.error(`[push-api] failed trace_id=${trace_id}`, error);
 
-  res.status(200).json(response);
+  return res.status(200).json({
+    ok: true,
+    attempted: true,
+    success: false,
+    target,
+    trace_id,
+    error,
+  });
 }
