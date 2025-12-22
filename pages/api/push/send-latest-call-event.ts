@@ -9,35 +9,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const callSid = typeof call_sid === 'string' ? call_sid : undefined;
   const userId = typeof user_id === 'string' ? user_id : undefined;
 
-  // 🔒 Guard: only allow sending push when debug=1
-  const debug = req.query.debug === '1';
+  const debugParam = String(req.query.debug ?? '');
+  const qToken = (req.query as any).token;
+  const hToken = req.headers['x-internal-token'];
+  let token: string | undefined;
+  if (typeof qToken === 'string' && qToken) token = qToken;
+  else if (typeof hToken === 'string' && hToken) token = hToken;
+
+  const envToken = process.env.PUSH_INTERNAL_TOKEN;
+  const allowed = debugParam === '1' && typeof envToken === 'string' && envToken && token === envToken;
 
   const trace_id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-  const target = {
-    call_sid: callSid ?? null,
-    user_id: userId ?? null,
-  };
+  const target = { call_sid: callSid ?? null, user_id: userId ?? null };
 
   // Always log start (for correlation)
-  console.log(
-    `[push-api] start trace_id=${trace_id} target=${JSON.stringify(target)} debug=${debug}`,
-  );
+  console.log(`[push-api] start trace_id=${trace_id} target=${JSON.stringify(target)} debug=${debugParam}`);
 
-  // ✅ 폭주 차단: debug=1 없으면 푸시 절대 발송하지 않음
-  if (!debug) {
-    console.log(`[push-api] guard_blocked trace_id=${trace_id}`);
+  if (!allowed) {
+    console.log(`[push-api] kill_switch_blocked trace_id=${trace_id} debug=${debugParam} hasToken=${Boolean(token)}`);
     return res.status(200).json({
       ok: true,
       attempted: false,
       success: false,
       target,
       trace_id,
-      reason: 'guard_blocked',
+      reason: 'kill_switch_blocked'
     });
   }
-
-  // ---- below: normal behavior (only when debug=1) ----
 
   let callEvent: any = null;
   try {
@@ -55,55 +53,76 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (rows.length > 0) callEvent = rows[0];
     }
   } catch (err) {
-    console.error(`[push-api] error querying call_events trace_id=${trace_id}`, err);
-  }
-
-  if (!callEvent) {
-    console.log(
-      `[push-api] skip trace_id=${trace_id} reason=no_call_event target=${JSON.stringify(target)}`,
-    );
+    console.error(`[push-api] db error trace_id=${trace_id}`, err);
     return res.status(200).json({
       ok: true,
       attempted: false,
       success: false,
       target,
       trace_id,
-      reason: 'no_call_event',
+      error: err,
     });
   }
 
-  console.log(
-    `[push-api] attempt trace_id=${trace_id} call_sid=${callEvent.call_sid ?? 'null'} user_id=${callEvent.user_id ?? 'null'}`,
-  );
+  if (!callEvent) {
+    console.log(`[push-api] no call events trace_id=${trace_id}`);
+    return res.status(200).json({
+      ok: true,
+      attempted: false,
+      success: false,
+      target,
+      trace_id,
+      error: 'no call event',
+    });
+  }
 
-  // sendPush returns success/failure result (SSOT)
-  const pushResult = await sendPush({ trace_id });
+  if ((callEvent as any).call_type !== 'inbound') {
+    console.log(`[push-api] latest event not inbound trace_id=${trace_id}`);
+    return res.status(200).json({
+      ok: true,
+      attempted: false,
+      success: false,
+      target,
+      trace_id,
+      error: 'latest event not inbound',
+    });
+  }
 
-  if (pushResult.success) {
-    console.log(`[push-api] success trace_id=${trace_id}`);
+  try {
+    const pushResult = await sendPush({ trace_id });
+    if ((pushResult as any).success) {
+      console.log(`[push-api] success trace_id=${trace_id}`);
+      return res.status(200).json({
+        ok: true,
+        attempted: true,
+        success: true,
+        target,
+        trace_id,
+      });
+    }
+    const errObj = {
+      statusCode: (pushResult as any).statusCode ?? null,
+      name: (pushResult as any).name ?? null,
+      message: (pushResult as any).message ?? null,
+    };
+    console.error(`[push-api] failed trace_id=${trace_id}`, errObj);
     return res.status(200).json({
       ok: true,
       attempted: true,
-      success: true,
+      success: false,
       target,
       trace_id,
+      error: errObj,
+    });
+  } catch (error) {
+    console.error(`[push-api] sendPush error trace_id=${trace_id}`, error);
+    return res.status(200).json({
+      ok: true,
+      attempted: true,
+      success: false,
+      target,
+      trace_id,
+      error,
     });
   }
-
-  const error = {
-    statusCode: pushResult.statusCode ?? null,
-    name: pushResult.name ?? null,
-    message: pushResult.message ?? 'push failed',
-  };
-
-  console.error(`[push-api] failed trace_id=${trace_id}`, error);
-
-  return res.status(200).json({
-    ok: true,
-    attempted: true,
-    success: false,
-    target,
-    trace_id,
-    error,
-  });
 }
