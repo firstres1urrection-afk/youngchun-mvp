@@ -16,7 +16,7 @@ export type SendPushResult = {
   name?: string | null;
 };
 
-export async function sendPush(): Promise<SendPushResult> {
+export async function sendPush(_opts?: { trace_id?: string }): Promise<SendPushResult> {
   try {
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
       return { success: false, message: 'missing VAPID keys' };
