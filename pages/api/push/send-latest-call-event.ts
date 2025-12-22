@@ -52,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     attempted = true;
     console.log(`[push-api] attempt trace_id=${trace_id} call_sid=${callEvent.call_sid} user_id=${callEvent.user_id}`);
 
-    const pushResult = await sendPush();
+    const pushResult = await sendPush({ trace_id });
     success = !!pushResult.success;
     if (success) {
       console.log(`[push-api] success trace_id=${trace_id}`);
