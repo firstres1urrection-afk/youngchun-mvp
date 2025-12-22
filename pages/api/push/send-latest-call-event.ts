@@ -76,16 +76,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  if ((callEvent as any).call_type !== 'inbound') {
-    console.log(`[push-api] latest event not inbound trace_id=${trace_id}`);
-    return res.status(200).json({
-      ok: true,
-      attempted: false,
-      success: false,
-      target,
-      trace_id,
-      error: 'latest event not inbound',
-    });
   }
 
   try {
