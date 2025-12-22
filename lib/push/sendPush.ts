@@ -1,7 +1,14 @@
 import { sql } from '@vercel/postgres';
 const webpush = require('web-push');
 
-export async function sendPush() {
+export type SendPushResult = {
+  success: boolean;
+  statusCode?: number | null;
+  message?: string;
+  name?: string | null;
+};
+
+export async function sendPush(): Promise<SendPushResult> {
   try {
     // ensure table exists
     await sql`CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -12,10 +19,10 @@ export async function sendPush() {
       user_agent TEXT NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     );`;
-    const { rows } = await sql`SELECT * FROM push_subscriptions ORDER BY created_at DESC LIMIT 1;`;
+
+    const { rows } = await sql`SELECT * FROM push_subscriptions ORDER BY created_at DESC LIMIT 1`;
     if (!rows || rows.length === 0) {
-      console.log('No push subscriptions found');
-      return;
+      return { success: false, message: 'No push subscriptions found' };
     }
     const sub = rows[0];
     const subscription = {
@@ -25,13 +32,20 @@ export async function sendPush() {
         auth: sub.auth,
       },
     };
+
     const payload = JSON.stringify({
       title: 'Youngchun',
-      body: '📞 새로운 전화 시도가 있었습니다.',
+      body: '새로운 전화 시도가 있었습니다.',
     });
+
     await webpush.sendNotification(subscription, payload);
-    console.log('Push notification sent');
-  } catch (err) {
-    console.error('Failed to send push', err);
+    return { success: true };
+  } catch (err: any) {
+    return {
+      success: false,
+      statusCode: err?.statusCode ?? null,
+      name: err?.name ?? null,
+      message: err?.message ?? String(err),
+    };
   }
 }
