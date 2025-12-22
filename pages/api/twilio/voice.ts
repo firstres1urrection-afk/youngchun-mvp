@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { twiml } from 'twilio';
 import { Pool } from '@neondatabase/serverless';
-import { sendPush } from '../../../lib/push/sendPush';
 
 // Twilio uses urlencoded by default; disable bodyParser to get raw body
 export const config = {
@@ -33,49 +32,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const callStatus = params.get('CallStatus');
 
   // log call event; await to avoid serverless shutdown before DB commit
-async function logCallEvent(
-  callSid: string | null,
-  from: string | null,
-  to: string | null,
-  callStatus: string | null,
-) {
-  if (!callSid || !to) return;
+  async function logCallEvent(
+    callSid: string | null,
+    from: string | null,
+    to: string | null,
+    callStatus: string | null,
+  ) {
+    if (!callSid || !to) return;
 
-  const { rows } = await pool.query(
-    'SELECT user_id FROM call_forward_numbers WHERE twilio_number = $1 AND user_id IS NOT NULL ORDER BY created_at DESC LIMIT 1',
-    [to],
-  );
-
-  if (rows.length === 0) {
-    console.warn('No user mapping found for number', to);
-    return;
-  }
-
-  const userId = rows[0].user_id;
-
-  try {
-    await pool.query(
-      'INSERT INTO call_events (call_sid, user_id, from_number, to_number, call_status) VALUES ($1, $2, $3, $4, $5)',
-      [callSid, userId, from, to, callStatus],
+    const { rows } = await pool.query(
+      'SELECT user_id FROM call_forward_numbers WHERE twilio_number = $1 AND user_id IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+      [to],
     );
-  } catch (err) {
-    // ignore duplicate key errors or other DB issues
-    console.warn('Error inserting call event', err);
-  }
-}
 
-// ✅ 반드시 await로 로깅 보장
-try {
-  await logCallEvent(callSid, from, to, callStatus);
-} catch (e) {
-  console.error('call event logging failed', e);
-}
+    if (rows.length === 0) {
+      console.warn('No user mapping found for number', to);
+      return;
+    }
+
+    const userId = rows[0].user_id;
+
+    try {
+      await pool.query(
+        'INSERT INTO call_events (call_sid, user_id, from_number, to_number, call_status) VALUES ($1, $2, $3, $4, $5)',
+        [callSid, userId, from, to, callStatus],
+      );
+    } catch (err) {
+      // ignore duplicate key errors or other DB issues
+      console.warn('Error inserting call event', err);
+    }
+  }
+
+  // ✅ 반드시 await로 로깅 보장
   try {
-    sendPush().catch((err) => {
-      console.error('Failed to send push notification', err);
-    });
-  } catch (err) {
-    console.error('Failed to initiate push', err);
+    await logCallEvent(callSid, from, to, callStatus);
+  } catch (e) {
+    console.error('call event logging failed', e);
   }
 
   const response = new twiml.VoiceResponse();
