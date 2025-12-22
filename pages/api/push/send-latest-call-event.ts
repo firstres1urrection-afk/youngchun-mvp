@@ -44,18 +44,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (callEvent) {
     attempted = true;
     try {
-      const result = await sendPush();
-      if (result && typeof (result as any).success === 'boolean') {
-        success = (result as any).success;
-      } else {
-        success = true;
-      }
+      
+       await sendPush();
+      success = true;}
     } catch (err: any) {
       success = false;
       error = {
-        statusCode: err?.statusCode ?? null,
-        message: err?.message ?? 'push failed',
-        name: err?.name ?? null,
+      statusCode: typeof err?.statusCode === 'number' ? err.statusCode : null,
+       name: typeof err?.name === 'string' ? err.name : null,
+       message: typeof err?.message === 'string' ? err.message : String(err),
       };
       console.error(`[push] failed trace_id=${trace_id}`, err);
     }
