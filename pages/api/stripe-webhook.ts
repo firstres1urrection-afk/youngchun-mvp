@@ -51,15 +51,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         const {
           id: subscription_id,
           customer,
-          status,
+          status: stripeStatus,
           current_period_start,
           current_period_end,
         } = sub;
 
+        // Use a safe status that never becomes active when user_id is not mapped yet
+        const safeStatus = 'pending';
+
         // Upsert into subscriptions table using only existing columns
         await sql`
           INSERT INTO subscriptions (stripe_subscription_id, stripe_customer_id, status, current_period_start, current_period_end)
-          VALUES (${subscription_id}, ${customer as string}, ${status}, to_timestamp(${current_period_start}), to_timestamp(${current_period_end}))
+          VALUES (${subscription_id}, ${customer as string}, ${safeStatus}, to_timestamp(${current_period_start}), to_timestamp(${current_period_end}))
           ON CONFLICT (stripe_subscription_id) DO UPDATE SET
             stripe_customer_id = EXCLUDED.stripe_customer_id,
             status = EXCLUDED.status,
@@ -74,13 +77,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         const invoice = event.data.object as Stripe.Invoice;
         const subscriptionId = invoice.subscription as string | null;
         if (subscriptionId) {
-          // Only update status to active if a user_id exists for this subscription
+          // attempt to get period end from invoice lines if available
+          let periodEnd: number | null = null;
+          try {
+            const line: any = invoice.lines?.data?.[0] || null;
+            periodEnd = line?.period?.end ?? null;
+          } catch (e) {
+            periodEnd = null;
+          }
+
+          // Only update status to active if a user_id exists and is not empty
           await sql`
             UPDATE subscriptions
             SET status = 'active',
+                current_period_end = COALESCE(to_timestamp(${periodEnd}), current_period_end),
                 updated_at = NOW()
             WHERE stripe_subscription_id = ${subscriptionId}
-              AND user_id IS NOT NULL;
+              AND user_id IS NOT NULL
+              AND btrim(user_id::text) <> '';
+          `;
+
+          // Invalidate any active subscriptions without a mapped user_id
+          await sql`
+            UPDATE subscriptions
+            SET status = 'invalid',
+                updated_at = NOW()
+            WHERE (user_id IS NULL OR btrim(user_id::text) = '')
+              AND status = 'active';
           `;
         }
         break;
