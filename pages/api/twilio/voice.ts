@@ -41,15 +41,42 @@ function parseFormUrlEncoded(raw: string): Record<string, string> {
   return out;
 }
 
-async function logCallEvent(callSid: string, from: string, to: string, callStatus: string) {
+// Map a Twilio phone number to a user_id from call_forward_numbers
+async function getUserIdForNumber(to: string): Promise<string | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id FROM call_forward_numbers
+       WHERE twilio_number = $1
+         AND is_released = false
+         AND expire_at > NOW()
+         AND user_id IS NOT NULL
+       LIMIT 1`,
+      [to],
+    );
+    if (rows.length > 0) {
+      return rows[0].user_id;
+    }
+    return null;
+  } catch (error) {
+    console.error('[voice] Failed to fetch user_id', { error, to });
+    return null;
+  }
+}
+
+async function logCallEvent(callSid: string, from: string, to: string, callStatus: string, userId: string | null) {
+  // If no user_id is provided, skip inserting into call_events to avoid NOT NULL constraint
+  if (!userId) {
+    console.warn('[voice] user_mapping_not_found', { callSid, to });
+    return;
+  }
   try {
     await pool.query(
       `
-      INSERT INTO call_events (call_sid, from_number, to_number, call_status)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO call_events (call_sid, from_number, to_number, call_status, user_id)
+      VALUES ($1, $2, $3, $4, $5)
       ON CONFLICT (call_sid) DO NOTHING
       `,
-      [callSid, from, to, callStatus],
+      [callSid, from, to, callStatus, userId],
     );
   } catch (error) {
     console.error('[voice] Failed to log call event', { error, callSid });
@@ -118,8 +145,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const to = parsed.To || '';
     const callStatus = parsed.CallStatus || '';
 
+    // determine user_id mapping
+    let userId: string | null = null;
+    if (to) {
+      userId = await getUserIdForNumber(to);
+    }
+
     if (callSid) {
-      await logCallEvent(callSid, from, to, callStatus);
+      await logCallEvent(callSid, from, to, callStatus, userId);
     } else {
       console.warn('[voice] Missing CallSid', { traceId });
     }
@@ -128,11 +161,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let push_success = false;
     let push_reason = 'skipped';
 
-    if (callSid) {
+    // Only attempt push if callSid and userId mapping succeeded
+    if (callSid && userId) {
       const r = await trySendPushOnce(callSid, traceId);
       push_attempted = !!r.attempted;
       push_success = !!r.success;
       push_reason = r.reason;
+    } else {
+      if (!userId) {
+        push_reason = 'user_mapping_not_found';
+      }
     }
 
     console.log(
