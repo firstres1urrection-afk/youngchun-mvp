@@ -54,19 +54,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           status,
           current_period_start,
           current_period_end,
-          cancel_at_period_end,
         } = sub;
 
-        // Upsert into subscriptions table using correct column names
+        // Upsert into subscriptions table using only existing columns
         await sql`
-          INSERT INTO subscriptions (stripe_subscription_id, stripe_customer_id, status, current_period_start, current_period_end, cancel_at_period_end)
-          VALUES (${subscription_id}, ${customer as string}, ${status}, to_timestamp(${current_period_start}), to_timestamp(${current_period_end}), ${cancel_at_period_end})
+          INSERT INTO subscriptions (stripe_subscription_id, stripe_customer_id, status, current_period_start, current_period_end)
+          VALUES (${subscription_id}, ${customer as string}, ${status}, to_timestamp(${current_period_start}), to_timestamp(${current_period_end}))
           ON CONFLICT (stripe_subscription_id) DO UPDATE SET
             stripe_customer_id = EXCLUDED.stripe_customer_id,
             status = EXCLUDED.status,
             current_period_start = EXCLUDED.current_period_start,
             current_period_end = EXCLUDED.current_period_end,
-            cancel_at_period_end = EXCLUDED.cancel_at_period_end;
+            updated_at = NOW();
         `;
         break;
       }
@@ -78,7 +77,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           // Only update status to active if a user_id exists for this subscription
           await sql`
             UPDATE subscriptions
-            SET status = 'active'
+            SET status = 'active',
+                updated_at = NOW()
             WHERE stripe_subscription_id = ${subscriptionId}
               AND user_id IS NOT NULL;
           `;
