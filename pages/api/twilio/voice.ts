@@ -5,29 +5,48 @@ import { randomUUID } from 'crypto';
 import { sendPush } from '../../../lib/push/sendPush';
 
 export const config = {
-  api: {
-    bodyParser: false, // Twilio sends x-www-form-urlencoded; we will parse raw body ourselves
-  },
+  api: { bodyParser: false },
 };
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-async function parseTwilioBody(req: NextApiRequest): Promise<Record<string, string>> {
+/**
+ * Twilio sends x-www-form-urlencoded.
+ * IMPORTANT: Avoid URLSearchParams iterator/entries() to stay build-safe even on low TS target.
+ */
+async function readRawBody(req: NextApiRequest): Promise<string> {
   return await new Promise((resolve, reject) => {
     let data = '';
     req.on('data', (chunk) => {
       data += chunk;
     });
-    req.on('end', () => {
-      const params = new URLSearchParams(data);
-      const result: Record<string, string> = {};
-      for (const [key, value] of params.entries()) {
-        result[key] = value;
-      }
-      resolve(result);
-    });
+    req.on('end', () => resolve(data));
     req.on('error', reject);
   });
+}
+
+/**
+ * Very small x-www-form-urlencoded parser (build-safe).
+ * - Handles key=value&key2=value2
+ * - Decodes + and %xx
+ */
+function parseFormUrlEncoded(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw) return out;
+
+  const pairs = raw.split('&');
+  for (let i = 0; i < pairs.length; i++) {
+    const p = pairs[i];
+    if (!p) continue;
+    const eq = p.indexOf('=');
+    const k = eq >= 0 ? p.slice(0, eq) : p;
+    const v = eq >= 0 ? p.slice(eq + 1) : '';
+    // Replace + with space, then decode percent-encoding
+    const key = decodeURIComponent(k.replace(/\+/g, ' '));
+    const val = decodeURIComponent(v.replace(/\+/g, ' '));
+    out[key] = val;
+  }
+  return out;
 }
 
 async function logCallEvent(callSid: string, from: string, to: string, callStatus: string) {
@@ -46,10 +65,7 @@ async function logCallEvent(callSid: string, from: string, to: string, callStatu
 }
 
 async function trySendPushOnce(callSid: string, traceId: string) {
-  // Returns { attempted, success }
-  let attempted = false;
-  let success = false;
-
+  // Returns { attempted, success, reason }
   try {
     const { rows } = await pool.query(
       'SELECT push_sent_at FROM call_events WHERE call_sid = $1 LIMIT 1',
@@ -57,105 +73,66 @@ async function trySendPushOnce(callSid: string, traceId: string) {
     );
 
     const shouldSendPush = rows.length > 0 && rows[0].push_sent_at === null;
-
     if (!shouldSendPush) {
       return { attempted: false, success: false, reason: 'already_sent_or_missing_row' };
     }
 
-    attempted = true;
-
+    // attempt push
     try {
       const result = await sendPush({ trace_id: traceId } as any);
       const ok = !!(result && (result as any).success);
 
       if (ok) {
-        success = true;
-        await pool.query(
-          'UPDATE call_events SET push_sent_at = NOW() WHERE call_sid = $1',
-          [callSid],
-        );
-        return { attempted, success, reason: 'sent_and_marked' };
+        await pool.query('UPDATE call_events SET push_sent_at = NOW() WHERE call_sid = $1', [callSid]);
+        return { attempted: true, success: true, reason: 'sent_and_marked' };
       }
 
-      return { attempted, success: false, reason: 'sendPush_returned_not_success' };
+      return { attempted: true, success: false, reason: 'sendPush_not_success' };
     } catch (err) {
       console.error('[voice] sendPush threw', { err, callSid, traceId });
-      return { attempted, success: false, reason: 'sendPush_threw' };
+      return { attempted: true, success: false, reason: 'sendPush_threw' };
     }
   } catch (err) {
-    console.error('[voice] error checking push_sent_at', { err, callSid, traceId });
-    return { attempted, success: false, reason: 'db_check_failed' };
+    console.error('[voice] DB check failed (push_sent_at)', { err, callSid, traceId });
+    return { attempted: false, success: false, reason: 'db_check_failed' };
   }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // 1) Always prepare TwiML first so we can always respond even if DB/push fails
-  const response = new twiml.VoiceResponse();
+  // Always prepare TwiML first so Twilio never gets a non-TwiML/5xx response.
+  const vr = new twiml.VoiceResponse();
   const message = '지금 해외 체류 중이라 전화를 받을 수 없습니다. 잠시 후 다시 연락드리겠습니다.';
-  response.say({ language: 'ko-KR' }, message);
-  response.pause({ length: 1 });
-  response.say({ language: 'ko-KR' }, message);
+  vr.say({ language: 'ko-KR' }, message);
+  vr.pause({ length: 1 });
+  vr.say({ language: 'ko-KR' }, message);
 
-  // 2) Always return TwiML at the end, no matter what happens
   try {
     if (req.method !== 'POST') {
-      // Twilio should POST, but respond with TwiML anyway to avoid Twilio error prompt
       res.setHeader('Content-Type', 'text/xml');
-      return res.status(200).send(response.toString());
+      return res.status(200).send(vr.toString());
     }
 
     const traceId = randomUUID();
 
-    let parsedBody: Record<string, string> = {};
+    let parsed: Record<string, string> = {};
     try {
-      parsedBody = await parseTwilioBody(req);
+      const raw = await readRawBody(req);
+      parsed = parseFormUrlEncoded(raw);
     } catch (err) {
-      console.error('[voice] Failed to parse Twilio webhook body', { err, traceId });
+      console.error('[voice] Failed to read/parse raw body', { err, traceId });
       // continue; still return TwiML
     }
 
-    const callSid = parsedBody.CallSid || '';
-    const from = parsedBody.From || '';
-    const to = parsedBody.To || '';
-    const callStatus = parsedBody.CallStatus || '';
+    const callSid = parsed.CallSid || '';
+    const from = parsed.From || '';
+    const to = parsed.To || '';
+    const callStatus = parsed.CallStatus || '';
 
-    // Log call event (best-effort)
+    // DB log (best-effort)
     if (callSid) {
       await logCallEvent(callSid, from, to, callStatus);
     } else {
-      console.warn('[voice] Missing CallSid', { traceId, parsedKeys: Object.keys(parsedBody || {}) });
+      console.warn('[voice] Missing CallSid', { traceId, parsedKeys: Object.keys(parsed || {}) });
     }
 
-    // Push logic (best-effort, must not block TwiML)
-    let push_attempted = false;
-    let push_success = false;
-    let push_reason = 'skipped';
-
-    if (callSid) {
-      const pushResult = await trySendPushOnce(callSid, traceId);
-      push_attempted = !!pushResult.attempted;
-      push_success = !!pushResult.success;
-      push_reason = (pushResult as any).reason || push_reason;
-    }
-
-    console.log(
-      JSON.stringify({
-        tag: 'twilio_voice',
-        call_sid: callSid,
-        from,
-        to,
-        call_status: callStatus,
-        trace_id: traceId,
-        push_attempted,
-        push_success,
-        push_reason,
-      }),
-    );
-  } catch (err) {
-    // Never throw; Twilio must receive TwiML
-    console.error('[voice] Unhandled error (will still return TwiML)', err);
-  }
-
-  res.setHeader('Content-Type', 'text/xml');
-  return res.status(200).send(response.toString());
-}
+    // Push (best-effort
