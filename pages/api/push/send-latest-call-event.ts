@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { Pool } from '@neondatabase/serverless';
-import sendPush from '../../../lib/push/sendPush';
+import { sendPush } from '../../../lib/push/sendPush';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
