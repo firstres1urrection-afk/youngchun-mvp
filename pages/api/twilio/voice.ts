@@ -10,10 +10,6 @@ export const config = {
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-/**
- * Twilio sends x-www-form-urlencoded.
- * IMPORTANT: Avoid URLSearchParams iterator/entries() to stay build-safe even on low TS target.
- */
 async function readRawBody(req: NextApiRequest): Promise<string> {
   return await new Promise((resolve, reject) => {
     let data = '';
@@ -25,11 +21,6 @@ async function readRawBody(req: NextApiRequest): Promise<string> {
   });
 }
 
-/**
- * Very small x-www-form-urlencoded parser (build-safe).
- * - Handles key=value&key2=value2
- * - Decodes + and %xx
- */
 function parseFormUrlEncoded(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (!raw) return out;
@@ -38,10 +29,11 @@ function parseFormUrlEncoded(raw: string): Record<string, string> {
   for (let i = 0; i < pairs.length; i++) {
     const p = pairs[i];
     if (!p) continue;
+
     const eq = p.indexOf('=');
     const k = eq >= 0 ? p.slice(0, eq) : p;
     const v = eq >= 0 ? p.slice(eq + 1) : '';
-    // Replace + with space, then decode percent-encoding
+
     const key = decodeURIComponent(k.replace(/\+/g, ' '));
     const val = decodeURIComponent(v.replace(/\+/g, ' '));
     out[key] = val;
@@ -65,7 +57,6 @@ async function logCallEvent(callSid: string, from: string, to: string, callStatu
 }
 
 async function trySendPushOnce(callSid: string, traceId: string) {
-  // Returns { attempted, success, reason }
   try {
     const { rows } = await pool.query(
       'SELECT push_sent_at FROM call_events WHERE call_sid = $1 LIMIT 1',
@@ -77,7 +68,6 @@ async function trySendPushOnce(callSid: string, traceId: string) {
       return { attempted: false, success: false, reason: 'already_sent_or_missing_row' };
     }
 
-    // attempt push
     try {
       const result = await sendPush({ trace_id: traceId } as any);
       const ok = !!(result && (result as any).success);
@@ -128,11 +118,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const to = parsed.To || '';
     const callStatus = parsed.CallStatus || '';
 
-    // DB log (best-effort)
     if (callSid) {
       await logCallEvent(callSid, from, to, callStatus);
     } else {
-      console.warn('[voice] Missing CallSid', { traceId, parsedKeys: Object.keys(parsed || {}) });
+      console.warn('[voice] Missing CallSid', { traceId });
     }
 
-    // Push (best-effort
+    let push_attempted = false;
+    let push_success = false;
+    let push_reason = 'skipped';
+
+    if (callSid) {
+      const r = await trySendPushOnce(callSid, traceId);
+      push_attempted = !!r.attempted;
+      push_success = !!r.success;
+      push_reason = r.reason;
+    }
+
+    console.log(
+      JSON.stringify({
+        tag: 'twilio_voice',
+        trace_id: traceId,
+        call_sid: callSid,
+        from,
+        to,
+        call_status: callStatus,
+        push_attempted,
+        push_success,
+        push_reason,
+      }),
+    );
+  } catch (err) {
+    console.error('[voice] Unhandled error (still returning TwiML)', err);
+  }
+
+  res.setHeader('Content-Type', 'text/xml');
+  return res.status(200).send(vr.toString());
+}
