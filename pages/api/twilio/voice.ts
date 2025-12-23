@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { twiml } from 'twilio';
 import { Pool } from '@neondatabase/serverless';
 import { randomUUID } from 'crypto';
-import sendPush from '../../../lib/push/sendPush';
+import { sendPush } from '../../../lib/push/sendPush';
 
 export const config = { api: { bodyParser: false } };
 
