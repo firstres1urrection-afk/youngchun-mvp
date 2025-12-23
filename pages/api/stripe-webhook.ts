@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import Stripe from 'stripe';
 import { sql } from '@vercel/postgres';
+import { assignTwilioNumberForUser } from '../../lib/twilio/assignNumber';
 
 export const config = {
   api: { bodyParser: false },
@@ -130,6 +131,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             WHERE status = 'active'
               AND (user_id IS NULL OR btrim(user_id::text) = '');
           `;
+
+          // -------- Twilio assignment with idempotency ---------
+          // Ensure billing_events table exists
+          await sql`
+            CREATE TABLE IF NOT EXISTS billing_events (
+              event_id TEXT PRIMARY KEY,
+              created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+          `;
+          // Check if event already processed
+          const { rows: existing } = await sql`
+            SELECT event_id FROM billing_events WHERE event_id = ${event.id};
+          `;
+          if (existing.length === 0) {
+            // Insert event id to mark as processed
+            await sql`
+              INSERT INTO billing_events (event_id) VALUES (${event.id});
+            `;
+
+            // Fetch subscription row to verify conditions
+            const { rows: subs } = await sql`
+              SELECT user_id, current_period_end
+              FROM subscriptions
+              WHERE stripe_subscription_id = ${subscriptionId}
+                AND status = 'active'
+                AND current_period_end > NOW()
+                AND user_id IS NOT NULL
+                AND btrim(user_id::text) <> '';
+            `;
+            if (subs.length > 0) {
+              const userId = subs[0].user_id as string;
+              const expireAt = new Date(subs[0].current_period_end as unknown as string);
+              try {
+                const result = await assignTwilioNumberForUser({ userId, expireAt });
+                console.log(JSON.stringify({
+                  trace_id: event.id,
+                  subscription_id: subscriptionId,
+                  user_id: userId,
+                  reused: result.reused,
+                  purchased: result.purchased,
+                  twilio_sid: result.twilioSid,
+                }));
+              } catch (assignErr: any) {
+                console.error('assignTwilioNumberForUser error:', assignErr);
+                // If error thrown, optionally remove billing_events row so stripe retry will reprocess
+                try {
+                  await sql`DELETE FROM billing_events WHERE event_id = ${event.id};`;
+                } catch (delErr: any) {
+                  console.error('failed to cleanup billing_events after error', delErr);
+                }
+                throw assignErr;
+              }
+            } else {
+              console.log(JSON.stringify({ trace_id: event.id, reason: 'no_active_subscription' }));
+            }
+          } else {
+            console.log(JSON.stringify({ trace_id: event.id, reason: 'already_processed' }));
+          }
+          // ------------------------------------------------------
         }
         break;
       }
