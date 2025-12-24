@@ -1,36 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { getInitialLang, setLang as setLangGlobal, t } from '../lib/i18n';
+import { getInitialLang, setLang as setLangGlobal, t, SupportedLang } from '../lib/i18n';
 import LanguageToggle from '../components/LanguageToggle';
 
-export default function Home() {
-  const [lang, setLang] = useState<'en' | 'ko'>('en');
+const Home: React.FC = () => {
+  const [lang, setLang] = useState<SupportedLang>('en');
 
   useEffect(() => {
     const initial = getInitialLang();
-    setLang(initial as 'en' | 'ko');
+    setLang(initial as SupportedLang);
+    setLangGlobal(initial as SupportedLang);
   }, []);
 
-  const handleLangChange = (newLang: 'en' | 'ko') => {
+  const handleLangChange = (newLang: SupportedLang) => {
     setLangGlobal(newLang);
     setLang(newLang);
   };
 
   return (
     <div style={{ padding: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ fontWeight: 'bold' }}>Youngchun</div>
         <LanguageToggle lang={lang} onChange={handleLangChange} />
       </div>
-      <h1>{t('home.headline', lang)}</h1>
-      <p>{t('home.subhead', lang)}</p>
+      <h1>{t('home.headline')}</h1>
+      <p>{t('home.subhead')}</p>
       <ul>
-        <li>{t('home.valueProps.roaming', lang)}</li>
-        <li>{t('home.valueProps.noAnswerApp', lang)}</li>
-        <li>{t('home.valueProps.realtime', lang)}</li>
+        <li>{t('home.valueProps.roaming')}</li>
+        <li>{t('home.valueProps.noAnswerApp')}</li>
+        <li>{t('home.valueProps.realtime')}</li>
       </ul>
-      <p>{t('home.priceLine', lang)}</p>
-      <button>{t('home.cta', lang)}</button>
-      <p style={{ fontSize: '0.8rem', color: '#666' }}>{t('home.footnote', lang)}</p>
+      <p>{t('home.priceLine')}</p>
+      <button>{t('home.cta')}</button>
+      <p style={{ fontSize: '0.8rem' }}>{t('home.footnote')}</p>
     </div>
   );
-}
+};
+
+export default Home;
