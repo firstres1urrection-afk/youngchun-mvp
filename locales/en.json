@@ -1,0 +1,14 @@
+{
+  "home": {
+    "headline": "Never miss a call to your number while you’re away",
+    "subhead": "Get notified the moment someone tries to call you.",
+    "valueProps": {
+      "roaming": "No roaming.",
+      "noAnswerApp": "No apps to answer calls.",
+      "realtime": "Just real-time awareness."
+    },
+    "priceLine": "$9.99 per month · Cancel anytime",
+    "cta": "Start getting call alerts",
+    "footnote": "Works anywhere with an internet connection."
+  }
+}
