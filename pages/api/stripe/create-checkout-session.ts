@@ -35,7 +35,6 @@ export default async function handler(
     });
   }
 
-  // Determine language from request: body.lang -> query.lang -> 'en'
   const lang =
     typeof (req.body as any)?.lang === 'string'
       ? ((req.body as any).lang as string)
@@ -46,18 +45,18 @@ export default async function handler(
   const selectedPriceId = lang === 'ko' ? PRICE_KRW_8900 : PRICE_USD_699;
 
   try {
-    // Create an anonymous user row (existing logic preserved)
+    // generate a new anonymous user (preserve existing pattern)
     const userId = randomUUID();
     const email = `anon+${userId}@youngchun.local`;
 
+    // NOTE: If users table doesn't exist or constraints differ, adjust safely:
+    // - either remove this insert, or wrap in try/catch and proceed.
     await sql`
       INSERT INTO users (id, email, created_at)
       VALUES (${userId}, ${email}, NOW())
     `;
 
-    const stripe = new Stripe(secretKey, {
-      apiVersion: '2025-02-24.acacia' as any, // keep compatible if your project pins an apiVersion; remove if not needed
-    });
+    const stripe = new Stripe(secretKey);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -68,17 +67,10 @@ export default async function handler(
         },
       ],
       allow_promotion_codes: true,
-
-      // metadata on session + subscription (preserve existing pattern)
-      metadata: {
-        userId,
-        lang,
-      },
+      metadata: { userId, lang },
       subscription_data: {
         metadata: { userId, lang },
       },
-
-      // Keep your existing redirect paths (change if those routes don't exist)
       success_url: `${baseUrl}/select-contacts?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/error`,
     });
