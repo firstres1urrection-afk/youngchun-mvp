@@ -21,6 +21,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const baseUrlRaw = process.env.NEXT_PUBLIC_BASE_URL || 'https://youngchun-mvp.vercel.app';
   const baseUrl = baseUrlRaw.trim().replace(/\/$/, '');
+ // Determine language from request
+  const lang = typeof (req.body as any)?.lang === 'string'
+    ? (req.body as any).lang
+    : typeof req.query?.lang === 'string'
+      ? (req.query.lang as string)
+      : 'en';
+  const selectedPriceId = lang === 'ko'
+    ? 'price_1Shjv3KVVTfSYsQLdGB42Sfr'
+    : 'price_1ShjwIKVVTfSYsQLphryjUNj';
 
   if (!/^https?:\/\/.+/i.test(baseUrl)) {
     return res.status(500).json({
@@ -47,9 +56,9 @@ await sql`
       mode: 'subscription',
       line_items: [
         {
-          price: priceId,
+          price: selectedPriceId,
           quantity: 1,
-        },
+      
       ],
       allow_promotion_codes: true,
       metadata: {
