@@ -4,6 +4,8 @@ import LanguageToggle from '../components/LanguageToggle';
 
 const Home: React.FC = () => {
   const [lang, setLang] = useState<SupportedLang>('en');
+  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const initial = getInitialLang();
@@ -14,6 +16,30 @@ const Home: React.FC = () => {
   const handleLangChange = (newLang: SupportedLang) => {
     setLangGlobal(newLang);
     setLang(newLang);
+  };
+
+  const handleCtaClick = async () => {
+    setIsRedirecting(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/stripe/create-checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lang }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create session');
+      }
+      if (data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      throw new Error('Missing url');
+    } catch (err: any) {
+      setError(err.message || 'Error');
+      setIsRedirecting(false);
+    }
   };
 
   return (
@@ -30,7 +56,10 @@ const Home: React.FC = () => {
         <li>{t('home.valueProps.realtime')}</li>
       </ul>
       <p>{t('home.priceLine')}</p>
-      <button>{t('home.cta')}</button>
+      <button onClick={handleCtaClick} disabled={isRedirecting}>
+        {isRedirecting ? (lang === 'ko' ? '잠시만 기다려주세요...' : 'Redirecting...') : t('home.cta')}
+      </button>
+      {error && <p style={{ color: 'red', fontSize: '0.8rem' }}>{error}</p>}
       <p style={{ fontSize: '0.8rem' }}>{t('home.footnote')}</p>
     </div>
   );
