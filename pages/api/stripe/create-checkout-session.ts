@@ -3,12 +3,12 @@ import Stripe from 'stripe';
 import { sql } from '@vercel/postgres';
 import { randomUUID } from 'crypto';
 
-const PRICE_KRW_8900 = 'price_1Shjv3KVVTfSYsQLdGB42Sfr';
-const PRICE_USD_699 = 'price_1ShjwIKVVTfSYsQLphryjUNj';
+const PRICE_KRW_8900 = process.env.STRIPE_PRICE_KRW_MONTHLY;
+const PRICE_USD_699 = process.env.STRIPE_PRICE_USD_MONTHLY;
 
 type Data =
   | { url: string }
-  | { error: string; hint?: string };
+  | { error: string; hint?: string; ok?: boolean };
 
 export default async function handler(
   req: NextApiRequest,
@@ -44,6 +44,14 @@ export default async function handler(
 
   const selectedPriceId = lang === 'ko' ? PRICE_KRW_8900 : PRICE_USD_699;
 
+  if (!selectedPriceId) {
+    const missingEnv =
+      lang === 'ko' ? 'STRIPE_PRICE_KRW_MONTHLY' : 'STRIPE_PRICE_USD_MONTHLY';
+    const errorMsg = `MISSING_ENV_${missingEnv}`;
+    console.error(errorMsg);
+    return res.status(500).json({ ok: false, error: errorMsg });
+  }
+
   try {
     // generate a new anonymous user (preserve existing pattern)
     const userId = randomUUID();
@@ -72,7 +80,6 @@ export default async function handler(
         metadata: { userId, lang },
       },
       success_url: `${baseUrl}/prepare?session_id={CHECKOUT_SESSION_ID}`,
-      
       cancel_url: `${baseUrl}/?canceled=1`,
     });
 
