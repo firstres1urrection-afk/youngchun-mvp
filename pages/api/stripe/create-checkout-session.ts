@@ -71,8 +71,9 @@ export default async function handler(
       subscription_data: {
         metadata: { userId, lang },
       },
-      success_url: `${baseUrl}/select-contacts?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${baseUrl}/error`,
+      success_url: `${baseUrl}/prepare?session_id={CHECKOUT_SESSION_ID}`,
+      
+      cancel_url: `${baseUrl}/?canceled=1`,
     });
 
     if (!session.url) {
